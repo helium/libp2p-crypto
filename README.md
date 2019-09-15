@@ -1,7 +1,6 @@
 # libp2p_crypto
-
-[![Build Status](https://travis-ci.org/helium/libp2p_crypto.svg?branch=master)](https://travis-ci.org/helium/libp2p_crypto)
-[![Coverage Status](https://coveralls.io/repos/github/helium/libp2p_crypto/badge.svg?branch=master)](https://coveralls.io/github/helium/libp2p_crypto?branch=master)
+[![Build status](https://badge.buildkite.com/7cd9c739d07cfe9879901bfb1139c73825557209f96a9aeb3e.svg)](https://buildkite.com/helium/libp2p-crypto)
+[![codecov](https://codecov.io/gh/helium/libp2p_crypto/branch/master/graph/badge.svg)](https://codecov.io/gh/helium/libp2p_crypto)
 
 This is a library of cryptography functions used by Helium's Erlang libp2p implementation.
 
