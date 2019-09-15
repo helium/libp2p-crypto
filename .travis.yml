@@ -5,7 +5,7 @@ language: erlang
 addons:
   apt:
     packages:
-      - libsodium23
+      - libsodium
       - libsodium-dev
 
 otp_release:
