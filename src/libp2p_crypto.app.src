@@ -14,7 +14,7 @@
 
 {application, libp2p_crypto,
  [{description, "An Erlang library for libp2p related cryptography functions"},
-  {vsn, "1.0.1"},
+  {vsn, "git"},
   {registered, []},
   {applications, [
                   kernel,
