@@ -13,8 +13,8 @@
 %% limitations under the License.
 
 {application, libp2p_crypto,
- [{description, "An Erlang library for libp2p related crypto functions"},
-  {vsn, "0.1.0"},
+ [{description, "An Erlang library for libp2p related cryptography functions"},
+  {vsn, "git"},
   {registered, []},
   {applications, [
                   kernel,
