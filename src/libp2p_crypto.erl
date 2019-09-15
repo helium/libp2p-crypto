@@ -58,29 +58,43 @@ load_keys(FileName) ->
         {error, Error} -> {error, Error}
     end.
 
+%% @doc Construct a signing function from a given private key. Using a
+%% signature function instead of passing a private key around allows
+%% different signing implementations, such as one built on a hardware
+%% based security module.
 -spec mk_sig_fun(privkey()) -> sig_fun().
 mk_sig_fun({ecc_compact, PrivKey}) ->
     fun(Bin) -> public_key:sign(Bin, sha256, PrivKey) end;
 mk_sig_fun({ed25519, PrivKey}) ->
     fun(Bin) -> enacl:sign_detached(Bin, PrivKey) end.
 
-%% Note that a Key Derivation Function should be applied to these keys before use
+%% @doc Constructs an ECDH exchange function from a given private key.
+%%
+%% Note that a Key Derivation Function should be applied to these keys
+%% before use
 -spec mk_ecdh_fun(privkey()) -> ecdh_fun().
 mk_ecdh_fun({ecc_compact, PrivKey}) ->
-    fun({ecc_compact, {PubKey, {namedCurve, ?secp256r1}}}) -> public_key:compute_key(PubKey, PrivKey) end;
+    fun({ecc_compact, {PubKey, {namedCurve, ?secp256r1}}}) ->
+            public_key:compute_key(PubKey, PrivKey)
+    end;
 mk_ecdh_fun({ed25519, PrivKey}) ->
     %% Do an X25519 ECDH exchange after converting the ED25519 keys to Curve25519 keys
-    fun({ed25519, PubKey}) -> enacl:box_beforenm(enacl:crypto_sign_ed25519_public_to_curve25519(PubKey),
-                                                 enacl:crypto_sign_ed25519_secret_to_curve25519(PrivKey)) end.
+    fun({ed25519, PubKey}) ->
+            enacl:box_beforenm(enacl:crypto_sign_ed25519_public_to_curve25519(PubKey),
+                               enacl:crypto_sign_ed25519_secret_to_curve25519(PrivKey))
+    end.
 
-%% @doc Store the given keys in a file.  See @see key_folder/1 for a
-%% utility function that returns a name and location for the keys that
-%% are relative to the swarm data folder.
+%% @doc Store the given keys in a given filename. The keypair is
+%% converted to binary keys_to_bin
+%%
+%% @see keys_to_bin/1
 -spec save_keys(key_map(), string()) -> ok | {error, term()}.
 save_keys(KeysMap, FileName) when is_list(FileName) ->
     Bin = keys_to_bin(KeysMap),
     file:write_file(FileName, Bin).
 
+%% @doc Convert a given key map to a binary representation that can be
+%% saved to file.
 -spec keys_to_bin(key_map()) -> binary().
 keys_to_bin(#{secret := {ecc_compact, PrivKey}, public := {ecc_compact, _PubKey}}) ->
     #'ECPrivateKey'{privateKey=PrivKeyBin, publicKey=PubKeyBin} = PrivKey,
@@ -94,6 +108,7 @@ keys_to_bin(#{secret := {ecc_compact, PrivKey}, public := {ecc_compact, _PubKey}
 keys_to_bin(#{secret := {ed25519, PrivKey}, public := {ed25519, PubKey}}) ->
     <<?KEYTYPE_ED25519:8, PrivKey:64/binary, PubKey:32/binary>>.
 
+%% @doc Convers a given binary to a key map
 -spec keys_from_bin(binary()) -> key_map().
 keys_from_bin(<<?KEYTYPE_ECC_COMPACT:8, 0:8/integer, PrivKeyBin:31/binary, PubKeyBin/binary>>) ->
     Params = {namedCurve, ?secp256r1},
@@ -109,6 +124,7 @@ keys_from_bin(<<?KEYTYPE_ED25519, PrivKey:64/binary, PubKey:32/binary>>) ->
     #{secret => {ed25519, PrivKey}, public => {ed25519, PubKey}}.
 
 
+%% @doc Convertsa a given tagged public key to its binary form.
 -spec pubkey_to_bin(pubkey()) -> pubkey_bin().
 pubkey_to_bin({ecc_compact, PubKey}) ->
     case ecc_compact:is_compact(PubKey) of
@@ -118,21 +134,26 @@ pubkey_to_bin({ecc_compact, PubKey}) ->
 pubkey_to_bin({ed25519, PubKey}) ->
     <<?KEYTYPE_ED25519, PubKey/binary>>.
 
+%% @doc Convertsa a given binary encoded public key to a tagged public
+%% key.
 -spec bin_to_pubkey(pubkey_bin()) -> pubkey().
 bin_to_pubkey(<<?KEYTYPE_ECC_COMPACT, PubKey:32/binary>>) ->
     {ecc_compact, ecc_compact:recover_key(PubKey)};
 bin_to_pubkey(<<?KEYTYPE_ED25519, PubKey:32/binary>>) ->
     {ed25519, PubKey}.
 
+%% @doc Converts a public key to base58 check encoded string.
 -spec pubkey_to_b58(pubkey()) -> string().
 pubkey_to_b58(PubKey) ->
     bin_to_b58(pubkey_to_bin(PubKey)).
 
+%% @doc Converts a base58 check encoded string to a public key.
 -spec b58_to_pubkey(string()) -> pubkey().
 b58_to_pubkey(Str) ->
     bin_to_pubkey(b58_to_bin(Str)).
 
-%% @doc Verifies a digital signature, using sha256.
+%% @doc Verifies a binary against a given digital signature over the
+%% sha256 of the binary.
 -spec verify(binary(), binary(), pubkey()) -> boolean().
 verify(Bin, Signature, {ecc_compact, PubKey}) ->
     public_key:verify(Bin, sha256, Signature, PubKey);
@@ -143,30 +164,45 @@ verify(Bin, Signature, {ed25519, PubKey}) ->
     end.
 
 
+%% @doc Convert a binary to a base58 check encoded string. The encoded
+%% version is set to 0.
+%%
+%% @see bin_to_b58/2
 -spec bin_to_b58(binary()) -> string().
 bin_to_b58(Bin) ->
     bin_to_b58(16#00, Bin).
 
+%% @doc Convert a binary to a base58 check encoded string
 -spec bin_to_b58(non_neg_integer(), binary()) -> string().
 bin_to_b58(Version, Bin) ->
     base58check_encode(Version, Bin).
 
+%% @doc Convert a base58 check encoded string to the original
+%% binary.The version encoded in the base58 encoded string is ignore.
+%%
+%% @see b58_to_version_bin/1
 -spec b58_to_bin(string())-> binary().
 b58_to_bin(Str) ->
     {_, Addr} = b58_to_version_bin(Str),
     Addr.
 
--spec b58_to_version_bin(string())-> {Version::non_neg_integer(), binary()}.
+%% @doc Decodes a base58 check ecnoded string into it's version and
+%% binary parts.
+-spec b58_to_version_bin(string())-> {Version::non_neg_integer(), Bin::binary()}.
 b58_to_version_bin(Str) ->
     case base58check_decode(Str) of
         {ok, <<Version:8/unsigned-integer>>, Bin} -> {Version, Bin};
         {error, Reason} -> error(Reason)
     end.
 
+%% @doc Converts a given binary public key to a P2P address.
+%%
+%% @see p2p_to_pubkey_bin/1
 -spec pubkey_bin_to_p2p(pubkey_bin()) -> string().
 pubkey_bin_to_p2p(PubKey) when is_binary(PubKey) ->
     "/p2p/" ++ bin_to_b58(PubKey).
 
+%% @doc Takes a P2P address and decodes it to a binary public key
 -spec p2p_to_pubkey_bin(string()) -> pubkey_bin().
 p2p_to_pubkey_bin(Str) ->
     case multiaddr:protocols(Str) of
