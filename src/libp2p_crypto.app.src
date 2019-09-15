@@ -1,4 +1,4 @@
-%% Copyright 2017 Marc Nijdam <marc@helium.com>
+%% Copyright 2019 Helium <info@helium.com>
 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 {application, libp2p_crypto,
  [{description, "An Erlang library for libp2p related cryptography functions"},
-  {vsn, "git"},
+  {vsn, "1.0.1"},
   {registered, []},
   {applications, [
                   kernel,
