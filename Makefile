@@ -30,7 +30,7 @@ test:
 ci:
 	$(REBAR) as test do eunit,cover && $(REBAR) do xref, dialyzer
 	$(REBAR) covertool generate
-	codecov --required -f _build/test/covertool/libp2p.covertool.xml
+	codecov --required -f _build/test/covertool/libp2p_crypto.covertool.xml
 
 typecheck:
 	$(REBAR) dialyzer
