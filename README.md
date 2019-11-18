@@ -1,4 +1,4 @@
-# libp2p_crypto
+# libp2p-crypto
 [![Build status](https://badge.buildkite.com/7cd9c739d07cfe9879901bfb1139c73825557209f96a9aeb3e.svg)](https://buildkite.com/helium/libp2p-crypto)
 [![codecov](https://codecov.io/gh/helium/libp2p_crypto/branch/master/graph/badge.svg)](https://codecov.io/gh/helium/libp2p_crypto)
 [![Hex.pm](https://img.shields.io/hexpm/v/libp2p_crypto)](https://hex.pm/packages/libp2p_crypto)
