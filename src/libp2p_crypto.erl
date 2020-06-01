@@ -158,11 +158,7 @@ b58_to_pubkey(Str) ->
 verify(Bin, Signature, {ecc_compact, PubKey}) ->
     public_key:verify(Bin, sha256, Signature, PubKey);
 verify(Bin, Signature, {ed25519, PubKey}) ->
-    case enacl:sign_verify_detached(Signature, Bin, PubKey) of
-        {ok, _} -> true;
-        _ -> false
-    end.
-
+    enacl:sign_verify_detached(Signature, Bin, PubKey).
 
 %% @doc Convert a binary to a base58 check encoded string. The encoded
 %% version is set to 0.
