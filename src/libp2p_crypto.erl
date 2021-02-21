@@ -2,6 +2,13 @@
 
 -include_lib("public_key/include/public_key.hrl").
 
+%% The binary key representation is a leading byte followed by the key material
+%% (either public or private).
+%%
+%% In order to support different networks (e.g. mainnet and testnet)
+%% the leading byte is split into two four bit parts.
+%% The first nibble is the network the key is on (NETTTYPE), and the second
+%% the type of keythat follows in the binary (KEYTYPE).
 -define(KEYTYPE_ECC_COMPACT, 0).
 -define(KEYTYPE_ED25519, 1).
 -define(NETTYPE_MAIN, 0).
