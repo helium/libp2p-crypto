@@ -12,19 +12,33 @@ jobs:
     container: heliumsystems/builder-erlang:1
 
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v2
 
-      - name: Fetch git tags
-        run: git fetch --prune --unshallow --tags
+      - name: Cache Hex Packages
+        uses: actions/cache@v1
+        with:
+          path: ~/.cache/rebar3/hex/hexpm/packages
+          key: ${{ runner.os }}-hex-${{ hashFiles(format('{0}{1}', github.workspace, '/rebar.lock')) }}
+          restore-keys: |
+            ${{ runner.os }}-hex-
+
+      - name: Cache Dialyzer PLTs
+        uses: actions/cache@v1
+        with:
+          path: ~/.cache/rebar3/rebar3_*_plt
+          key: ${{ runner.os }}-dialyzer-${{ hashFiles(format('{0}{1}', github.workspace, '/rebar.config')) }}
+          restore-keys: |
+            ${{ runner.os }}-dialyzer-
 
       - name: Build
         run: rebar3 compile
 
-      - name: Run Dialyzer
-        run: rebar3 do dialyzer, xref
-
       - name: Run tests
         run: rebar3 eunit
+
+      - name: Run Dialyzer
+        run: rebar3 do dialyzer, xref
 
       - name: Generate coverage report
         run: rebar3 covertool generate
