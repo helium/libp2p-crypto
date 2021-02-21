@@ -1,6 +1,6 @@
 # libp2p-crypto
 [![CI](https://github.com/helium/libp2p-crypto/actions/workflows/ci.yml/badge.svg)](https://github.com/helium/libp2p-crypto/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/helium/libp2p_crypto/branch/master/graph/badge.svg)](https://codecov.io/gh/helium/libp2p_crypto)
+[![codecov](https://codecov.io/gh/helium/libp2p-crypto/branch/master/graph/badge.svg?token=h7C8KMXO8K)](https://codecov.io/gh/helium/libp2p-crypto)
 [![Hex.pm](https://img.shields.io/hexpm/v/libp2p_crypto)](https://hex.pm/packages/libp2p_crypto)
 
 This is a library of cryptography functions used by Helium's Erlang libp2p implementation.
