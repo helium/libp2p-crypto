@@ -34,6 +34,8 @@
 -export_type([privkey/0, pubkey/0, pubkey_bin/0, sig_fun/0, ecdh_fun/0]).
 
 -export([
+    get_network/1,
+    set_network/1,
     generate_keys/1,
     generate_keys/2,
     mk_sig_fun/1,
@@ -59,12 +61,27 @@
     keys_from_bin/1
 ]).
 
+-define(network, libp2p_crypto_network).
+
+%% @doc Get the currrent network used for public and private keys.
+%% If not set return the given default
+-spec get_network(Default :: network()) -> network().
+get_network(Default) ->
+    persistent_term:get(?network, Default).
+
+%% @doc Sets the network used for public and private keys.
+-spec set_network(network()) -> ok.
+set_network(Network) ->
+    persistent_term:put(?network, Network).
+
 %% @doc Generate keys suitable for a swarm.  The returned private and
 %% public key has the attribute that the public key is a compressable
 %% public key.
+%%
+%% The keys are generated on the currently active network.
 -spec generate_keys(key_type()) -> key_map().
 generate_keys(KeyType) ->
-    generate_keys(mainnet, KeyType).
+    generate_keys(get_network(mainnet), KeyType).
 
 %% @doc Generate keys suitable for a swarm on a given network.
 %% The returned private and public key has the attribute that
@@ -193,10 +210,11 @@ keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/bina
         network => to_network(NetType)
     }.
 
-%% @doc Convertsa a given tagged public key to its binary form on mainnet.
+%% @doc Convertsa a given tagged public key to its binary form on the current
+%% network.
 -spec pubkey_to_bin(pubkey()) -> pubkey_bin().
 pubkey_to_bin(PubKey) ->
-    pubkey_to_bin(mainnet, PubKey).
+    pubkey_to_bin(get_network(mainnet), PubKey).
 
 %% @doc Convertsa a given tagged public key to its binary form on the given
 %% network.
@@ -212,10 +230,10 @@ pubkey_to_bin(Network, {ed25519, PubKey}) ->
     <<(from_network(Network)):4, ?KEYTYPE_ED25519:4, PubKey/binary>>.
 
 %% @doc Convertsa a given binary encoded public key to a tagged public
-%% key. The key is asserted to be on mainnet
+%% key. The key is asserted to be on the current active network.
 -spec bin_to_pubkey(pubkey_bin()) -> pubkey().
 bin_to_pubkey(PubKeyBin) ->
-    bin_to_pubkey(mainnet, PubKeyBin).
+    bin_to_pubkey(get_network(mainnet), PubKeyBin).
 
 %% @doc Convertsa a given binary encoded public key to a tagged public key. If
 %% the given binary is not on the specified network a bad_network is thrown.
@@ -231,10 +249,11 @@ bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ED25519:4, PubKey:32/binary>>) ->
         false -> erlang:error({bad_network, NetType})
     end.
 
-%% @doc Converts a public key to base58 check encoded string.
+%% @doc Converts a public key to base58 check encoded string
+%% on the currently active network.
 -spec pubkey_to_b58(pubkey()) -> string().
 pubkey_to_b58(PubKey) ->
-    pubkey_to_b58(mainnet, PubKey).
+    pubkey_to_b58(get_network(mainnet), PubKey).
 
 %% @doc Converts a public key to base58 check encoded string on the given
 %% network.
@@ -243,10 +262,10 @@ pubkey_to_b58(Network, PubKey) ->
     bin_to_b58(pubkey_to_bin(Network, PubKey)).
 
 %% @doc Converts a base58 check encoded string to a public key.
-%% The public key is asserted to be on mainnet.
+%% The public key is asserted to be on the currently active network.
 -spec b58_to_pubkey(string()) -> pubkey().
 b58_to_pubkey(Str) ->
-    b58_to_pubkey(mainnet, Str).
+    b58_to_pubkey(get_network(mainnet), Str).
 
 %% @doc Converts a base58 check encoded string to a public key.
 %% The public key is asserted to be on the given network.
@@ -359,48 +378,38 @@ save_load_test() ->
     ok.
 
 address_test() ->
-    Roundtrip = fun
-        ({Network, KeyType}) ->
-            #{public := PubKey} = generate_keys(Network, KeyType),
+    Roundtrip = fun (KeyType) ->
+        #{public := PubKey} = generate_keys(KeyType),
 
-            PubBin = pubkey_to_bin(Network, PubKey),
-            PubB58 = bin_to_b58(PubBin),
+        PubBin = pubkey_to_bin(PubKey),
+        ?assertEqual(PubKey, bin_to_pubkey(PubBin)),
 
-            MAddr = pubkey_bin_to_p2p(PubBin),
-            ?assertEqual(PubBin, p2p_to_pubkey_bin(MAddr)),
+        PubB58 = bin_to_b58(PubBin),
 
-            ?assertEqual(PubB58, pubkey_to_b58(Network, PubKey)),
-            ?assertEqual(PubKey, b58_to_pubkey(Network, PubB58)),
+        MAddr = pubkey_bin_to_p2p(PubBin),
+        ?assertEqual(PubBin, p2p_to_pubkey_bin(MAddr)),
 
-            BadNetwork =
-                case Network of
-                    mainnet -> testnet;
-                    testnet -> mainnet
-                end,
-            ?assertError({bad_network, _}, bin_to_pubkey(BadNetwork, PubBin));
-        (KeyType) ->
-            #{public := PubKey} = generate_keys(KeyType),
+        ?assertEqual(PubB58, pubkey_to_b58(PubKey)),
+        ?assertEqual(PubKey, b58_to_pubkey(PubB58)),
 
-            PubBin = pubkey_to_bin(PubKey),
-            ?assertEqual(PubKey, bin_to_pubkey(PubBin)),
-
-            PubB58 = bin_to_b58(PubBin),
-
-            MAddr = pubkey_bin_to_p2p(PubBin),
-            ?assertEqual(PubBin, p2p_to_pubkey_bin(MAddr)),
-
-            ?assertEqual(PubB58, pubkey_to_b58(PubKey)),
-            ?assertEqual(PubKey, b58_to_pubkey(PubB58)),
-
-            ?assertError({bad_network, _}, bin_to_pubkey(testnet, PubBin))
+        BadNetwork =
+            case get_network(mainnet) of
+                mainnet -> testnet;
+                testnet -> mainnet
+            end,
+        ?assertError({bad_network, _}, bin_to_pubkey(BadNetwork, PubBin))
     end,
 
     Roundtrip(ecc_compact),
-    Roundtrip({mainnet, ecc_compact}),
-    Roundtrip({testnet, ecc_compact}),
     Roundtrip(ed25519),
-    Roundtrip({mainnet, ed25519}),
-    Roundtrip({testnet, ed25519}),
+
+    set_network(mainnet),
+    Roundtrip(ecc_compact),
+    Roundtrip(ed25519),
+
+    set_network(testnet),
+    Roundtrip(ecc_compact),
+    Roundtrip(ed25519),
 
     ok.
 
