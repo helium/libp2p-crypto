@@ -208,7 +208,20 @@ keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/bina
         secret => {ed25519, PrivKey},
         public => {ed25519, PubKey},
         network => to_network(NetType)
-    }.
+    };
+
+%% Support the Helium Rust wallet format, which unfortunately duplicates the network
+%% and key type just before the public key.
+keys_from_bin(
+    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey:32/binary,
+        NetType:4, ?KEYTYPE_ECC_COMPACT:4, PubKey:32/binary>>
+) ->
+    keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey, PubKey>>);
+keys_from_bin(
+    <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary,
+        NetType:4, ?KEYTYPE_ED25519:4, PubKey:32/binary>>
+) ->
+    keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey, PubKey>>).
 
 %% @doc Convertsa a given tagged public key to its binary form on the current
 %% network.
