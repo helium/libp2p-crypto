@@ -216,7 +216,7 @@ keys_from_bin(
     <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey:32/binary,
         NetType:4, ?KEYTYPE_ECC_COMPACT:4, PubKey:32/binary>>
 ) ->
-    keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey, PubKey>>);
+    keys_from_bin(<<NetType:4, ?KEYTYPE_ECC_COMPAT:4, PrivKey, PubKey>>);
 keys_from_bin(
     <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary,
         NetType:4, ?KEYTYPE_ED25519:4, PubKey:32/binary>>
@@ -488,6 +488,27 @@ round_trip_short_key_test() ->
     ?assertEqual(ShortKeyMap, keys_from_bin(Bin)),
     ok.
 
+helium_wallet_decode_test() ->
+    FakeTestnetKeyMap = #{
+        secret => {ed25519, <<192, 147, 19, 139, 114, 76, 92, 18, 67, 206, 210, 241, 21,
+            18, 84, 12, 26, 171, 160, 255, 6, 17, 227, 18, 78, 255, 182, 94, 202, 62, 125,
+            50, 75, 192, 49, 183, 242, 203, 231, 180, 84, 235, 178, 8, 57, 34, 132, 195,
+            107, 140, 155, 85, 133, 58, 131, 188, 94, 234, 216, 101, 241, 12, 231, 107>>},
+        public => {ed25519, <<87, 246, 67, 78, 245, 59, 166, 216, 236, 17, 195, 144, 101,
+            96, 188, 112, 178, 183, 80, 75, 195, 218, 46, 184, 175, 181, 131, 207, 236,
+            146, 18, 237>>},
+        network => testnet
+    },
+    FakeTestnetKeyPair = <<17, 192, 147, 19, 139, 114, 76, 92, 18, 67, 206, 210, 241, 21,
+        18, 84, 12, 26, 171, 160, 255, 6, 17, 227, 18, 78, 255, 182, 94, 202, 62, 125, 50,
+        75, 192, 49, 183, 242, 203, 231, 180, 84, 235, 178, 8, 57, 34, 132, 195, 107, 140,
+        155, 85, 133, 58, 131, 188, 94, 234, 216, 101, 241, 12, 231, 107, 17, 87, 246, 67,
+        78, 245, 59, 166, 216, 236, 17, 195, 144, 101, 96, 188, 112, 178, 183, 80, 75, 195,
+        218, 46, 184, 175, 181, 131, 207, 236, 146, 18, 237>>,
+    KeyMap = keys_from_bin(FakeTestnetKeyPair),
+    ?assertEqual(FakeTestnetKeyMap, KeyMap),
+    ok.
+    
 nonl([$\n | T]) -> nonl(T);
 nonl([H | T]) -> [H | nonl(T)];
 nonl([]) -> [].
