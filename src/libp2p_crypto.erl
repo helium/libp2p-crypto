@@ -17,12 +17,12 @@
 -type key_type() :: ecc_compact | ed25519.
 -type network() :: mainnet | testnet.
 -type privkey() ::
-    {ecc_compact, ecc_compact:private_key()} |
-    {ed25519, enacl_privkey()}.
+    {ecc_compact, ecc_compact:private_key()}
+    | {ed25519, enacl_privkey()}.
 
 -type pubkey() ::
-    {ecc_compact, ecc_compact:public_key()} |
-    {ed25519, enacl_pubkey()}.
+    {ecc_compact, ecc_compact:public_key()}
+    | {ed25519, enacl_pubkey()}.
 
 -type pubkey_bin() :: <<_:8, _:_*8>>.
 -type sig_fun() :: fun((binary()) -> binary()).
@@ -119,9 +119,9 @@ load_keys(FileName) ->
 %% based security module.
 -spec mk_sig_fun(privkey()) -> sig_fun().
 mk_sig_fun({ecc_compact, PrivKey}) ->
-    fun (Bin) -> public_key:sign(Bin, sha256, PrivKey) end;
+    fun(Bin) -> public_key:sign(Bin, sha256, PrivKey) end;
 mk_sig_fun({ed25519, PrivKey}) ->
-    fun (Bin) -> enacl:sign_detached(Bin, PrivKey) end.
+    fun(Bin) -> enacl:sign_detached(Bin, PrivKey) end.
 
 %% @doc Constructs an ECDH exchange function from a given private key.
 %%
@@ -129,12 +129,12 @@ mk_sig_fun({ed25519, PrivKey}) ->
 %% before use
 -spec mk_ecdh_fun(privkey()) -> ecdh_fun().
 mk_ecdh_fun({ecc_compact, PrivKey}) ->
-    fun ({ecc_compact, {PubKey, {namedCurve, ?secp256r1}}}) ->
+    fun({ecc_compact, {PubKey, {namedCurve, ?secp256r1}}}) ->
         public_key:compute_key(PubKey, PrivKey)
     end;
 mk_ecdh_fun({ed25519, PrivKey}) ->
     %% Do an X25519 ECDH exchange after converting the ED25519 keys to Curve25519 keys
-    fun ({ed25519, PubKey}) ->
+    fun({ed25519, PubKey}) ->
         enacl:box_beforenm(
             enacl:crypto_sign_ed25519_public_to_curve25519(PubKey),
             enacl:crypto_sign_ed25519_secret_to_curve25519(PrivKey)
@@ -170,9 +170,22 @@ keys_to_bin(Keys = #{secret := {ed25519, PrivKey}, public := {ed25519, PubKey}})
 
 %% @doc Convers a given binary to a key map
 -spec keys_from_bin(binary()) -> key_map().
+%% Support the Helium Rust wallet format, which unfortunately duplicates the network
+%% and key type just before the public key.
 keys_from_bin(
-    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, 0:8/integer, PrivKeyBin:31/binary,
-        PubKeyBin/binary>>
+    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey:32/binary, NetType:4, ?KEYTYPE_ECC_COMPACT:4,
+        PubKey:32/binary>>
+) ->
+    {#'ECPoint'{point = PubKeyBin}, _} = ecc_compact:recover_key(PubKey),
+    keys_from_bin(<<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey/binary, PubKeyBin/binary>>);
+keys_from_bin(
+    <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, NetType:4, ?KEYTYPE_ED25519:4,
+        PubKey:32/binary>>
+) ->
+    keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey/binary, PubKey/binary>>);
+%% Followed by the convention uses in this library
+keys_from_bin(
+    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, 0:8/integer, PrivKeyBin:31/binary, PubKeyBin/binary>>
 ) ->
     Params = {namedCurve, ?secp256r1},
     PrivKey = #'ECPrivateKey'{
@@ -208,20 +221,7 @@ keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/bina
         secret => {ed25519, PrivKey},
         public => {ed25519, PubKey},
         network => to_network(NetType)
-    };
-
-%% Support the Helium Rust wallet format, which unfortunately duplicates the network
-%% and key type just before the public key.
-keys_from_bin(
-    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey:32/binary,
-        NetType:4, ?KEYTYPE_ECC_COMPACT:4, PubKey:32/binary>>
-) ->
-    keys_from_bin(<<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey/binary, PubKey/binary>>);
-keys_from_bin(
-    <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary,
-        NetType:4, ?KEYTYPE_ED25519:4, PubKey:32/binary>>
-) ->
-    keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey/binary, PubKey/binary>>).
+    }.
 
 %% @doc Convertsa a given tagged public key to its binary form on the current
 %% network.
@@ -375,7 +375,7 @@ base58check_decode(B58) ->
 -include_lib("eunit/include/eunit.hrl").
 
 save_load_test() ->
-    SaveLoad = fun (Network, KeyType) ->
+    SaveLoad = fun(Network, KeyType) ->
         FileName = nonl(os:cmd("mktemp")),
         Keys = generate_keys(Network, KeyType),
         ok = libp2p_crypto:save_keys(Keys, FileName),
@@ -391,7 +391,7 @@ save_load_test() ->
     ok.
 
 address_test() ->
-    Roundtrip = fun (KeyType) ->
+    Roundtrip = fun(KeyType) ->
         #{public := PubKey} = generate_keys(KeyType),
 
         PubBin = pubkey_to_bin(PubKey),
@@ -428,7 +428,7 @@ address_test() ->
 
 verify_sign_test() ->
     Bin = <<"sign me please">>,
-    Verify = fun (KeyType) ->
+    Verify = fun(KeyType) ->
         #{secret := PrivKey, public := PubKey} = generate_keys(KeyType),
         Sign = mk_sig_fun(PrivKey),
         Signature = Sign(Bin),
@@ -443,7 +443,7 @@ verify_sign_test() ->
     ok.
 
 verify_ecdh_test() ->
-    Verify = fun (KeyType) ->
+    Verify = fun(KeyType) ->
         #{secret := PrivKey1, public := PubKey1} = generate_keys(KeyType),
         #{secret := PrivKey2, public := PubKey2} = generate_keys(KeyType),
         #{secret := _PrivKey3, public := PubKey3} = generate_keys(KeyType),
@@ -459,6 +459,7 @@ verify_ecdh_test() ->
 
     ok.
 
+%% erlfmt-ignore
 round_trip_short_key_test() ->
     ShortKeyMap = #{
         network => mainnet,
@@ -488,7 +489,8 @@ round_trip_short_key_test() ->
     ?assertEqual(ShortKeyMap, keys_from_bin(Bin)),
     ok.
 
-helium_wallet_decode_test() ->
+%% erlfmt-ignore
+helium_wallet_decode_ed25519_test() ->
     FakeTestnetKeyMap = #{
         secret => {ed25519, <<192, 147, 19, 139, 114, 76, 92, 18, 67, 206, 210, 241, 21,
             18, 84, 12, 26, 171, 160, 255, 6, 17, 227, 18, 78, 255, 182, 94, 202, 62, 125,
@@ -516,7 +518,50 @@ helium_wallet_decode_test() ->
     KeyMap = keys_from_bin(FakeTestnetKeyPair),
     ?assertEqual(FakeTestnetKeyMap, KeyMap),
     ok.
-    
+
+%% erlfmt-ignore
+helium_wallet_decode_ecc_compact_test() ->
+    FakeTestnetKeyMap = #{
+        network => testnet,
+        public =>
+            {ecc_compact,{{'ECPoint',
+                <<4,35,41,75,130,51,74,141,42, 34,140,61,222,93,12,114,10,
+                238,142,214,23,56,70,82,128, 107,100,190,75,80,92,66,106,
+                47,99,220,162,215,185,130,211, 86,56,165,149,80,98,123,196,
+                188,218,249,171,170,182,108, 247,184,233,199,14,216,41,209,
+                36>>},
+            {namedCurve,{1,2,840,10045,3,1,7}}}},
+      secret =>
+          {ecc_compact,{'ECPrivateKey',1,
+                <<87,144,91,38,220,189,67,111,253,122,45,167,249,160,253,
+                73,145,93,208,112,65,69,89,175,98,89,59,222,68,178,37,
+                176>>,
+            {namedCurve,{1,2,840,10045,3,1,7}},
+                <<4,35,41,75,130,51,74,141,42,34,140,61,222,93,12,114,
+                10,238,142,214,23,56,70,82,128,107,100,190,75,80,92,
+                66,106,47,99,220,162,215,185,130,211,86,56,165,149,
+                80,98,123,196,188,218,249,171,170,182,108,247,184,
+                233,199,14,216,41,209,36>>}}},
+    FakeTestnetKeyPair =
+        <<
+        %% network type byte (testnet, ecc_compact)
+        16,
+        %% 32 byte private key
+        87,144,91,38,220,189,67,111,253,122,45,167,249,160,
+        253,73,145,93,208,112,65,69,89,175,98,89,59,222,68,178,
+        37,176,
+
+        %% repeated type byte
+        16,
+        %% 32 byte compact public key
+        35,41,75,130,51,74,141,42,34,140,61,222,93,12,
+        114,10,238,142,214,23,56,70,82,128,107,100,190,75,80,92,
+        66,106
+        >>,
+    KeyMap = keys_from_bin(FakeTestnetKeyPair),
+    ?assertEqual(FakeTestnetKeyMap, KeyMap),
+    ok.
+
 nonl([$\n | T]) -> nonl(T);
 nonl([H | T]) -> [H | nonl(T)];
 nonl([]) -> [].
