@@ -23,6 +23,7 @@
                   enacl,
                   ecc_compact,
                   multiaddr,
+                  multihash,
                   erl_base58
                  ]},
   {env,[]},

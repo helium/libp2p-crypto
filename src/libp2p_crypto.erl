@@ -11,18 +11,44 @@
 %% the type of keythat follows in the binary (KEYTYPE).
 -define(KEYTYPE_ECC_COMPACT, 0).
 -define(KEYTYPE_ED25519, 1).
+-define(KEYTYPE_MULTISIG, 2).
 -define(NETTYPE_MAIN, 0).
 -define(NETTYPE_TEST, 1).
 
+-define(MULTISIG_SIG_LEN_BYTES,  8). % TODO Will we ever have a sig len > 65535?
+-define(MULTISIG_KEY_INDEX_BITS, 8). % TODO Will we ever need more than 255 keys?
+
+%% TODO Expose list of hash types from multihash lib?
+-define(MULTI_HASH_TYPES_ALL, [
+    sha256,
+    sha256_dbl,
+    sha512,
+    sha3_224,
+    sha3_256,
+    sha3_384,
+    sha3_512,
+    shake128,
+    shake256
+]).
+-define(MULTI_HASH_TYPE_DEFAULT, sha256).
+-define(MULTI_HASH_TYPES_SUPPORTED, [?MULTI_HASH_TYPE_DEFAULT]).
+-define(MULTI_HASH_TYPES_DEPRECATED, []). % TODO Where to use?
+
 -type key_type() :: ecc_compact | ed25519.
 -type network() :: mainnet | testnet.
--type privkey() ::
+-opaque privkey() ::
     {ecc_compact, ecc_compact:private_key()}
     | {ed25519, enacl_privkey()}.
 
--type pubkey() ::
+-opaque pubkey_multi() ::
+    {multisig, pos_integer(), pos_integer(), binary()}.
+
+-opaque pubkey_single() ::
     {ecc_compact, ecc_compact:public_key()}
     | {ed25519, enacl_pubkey()}.
+
+-opaque pubkey() ::
+    pubkey_single() | pubkey_multi().
 
 -type pubkey_bin() :: <<_:8, _:_*8>>.
 -type sig_fun() :: fun((binary()) -> binary()).
@@ -31,7 +57,15 @@
 -type enacl_privkey() :: <<_:256>>.
 -type enacl_pubkey() :: <<_:256>>.
 
--export_type([privkey/0, pubkey/0, pubkey_bin/0, sig_fun/0, ecdh_fun/0]).
+-export_type([
+    privkey/0,
+    pubkey/0,
+    pubkey_bin/0,
+    pubkey_multi/0,
+    pubkey_single/0,
+    sig_fun/0,
+    ecdh_fun/0
+]).
 
 -export([
     get_network/1,
@@ -58,7 +92,10 @@
     p2p_to_pubkey_bin/1,
     verify/3,
     keys_to_bin/1,
-    keys_from_bin/1
+    keys_from_bin/1,
+    make_multisig_pubkey/3,
+    make_multisig_pubkey/4,
+    make_multisig_signature/4
 ]).
 
 -define(network, libp2p_crypto_network).
@@ -240,9 +277,17 @@ pubkey_to_bin(Network, {ecc_compact, PubKey}) ->
             erlang:error(not_compact)
     end;
 pubkey_to_bin(Network, {ed25519, PubKey}) ->
-    <<(from_network(Network)):4, ?KEYTYPE_ED25519:4, PubKey/binary>>.
+    <<(from_network(Network)):4, ?KEYTYPE_ED25519:4, PubKey/binary>>;
+pubkey_to_bin(Network, {multisig, M, N, KeysDigest}) ->
+    <<
+        (from_network(Network)):4,
+        ?KEYTYPE_MULTISIG:4,
+        M:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+        N:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+        KeysDigest/binary
+    >>.
 
-%% @doc Convertsa a given binary encoded public key to a tagged public
+%% @doc Converts a a given binary encoded public key to a tagged public
 %% key. The key is asserted to be on the current active network.
 -spec bin_to_pubkey(pubkey_bin()) -> pubkey().
 bin_to_pubkey(PubKeyBin) ->
@@ -259,6 +304,31 @@ bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PubKey:32/binary>>) 
 bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ED25519:4, PubKey:32/binary>>) ->
     case NetType == from_network(Network) of
         true -> {ed25519, PubKey};
+        false -> erlang:error({bad_network, NetType})
+    end;
+bin_to_pubkey(
+    Network,
+    <<
+        NetType:4,
+        ?KEYTYPE_MULTISIG:4,
+        M:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+        N:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+        KeysDigest/binary
+    >>
+) ->
+    case NetType == from_network(Network) of
+        true ->
+            case M =< N of
+                true ->
+                    case multihash:decode(KeysDigest) of
+                        {error, Reason} ->
+                            erlang:error({bad_multihash, Reason});
+                        {ok, _, _, _} ->
+                            {multisig, M, N, KeysDigest}
+                    end;
+                false ->
+                    erlang:error({m_higher_than_n, M, N})
+            end;
         false -> erlang:error({bad_network, NetType})
     end.
 
@@ -296,13 +366,91 @@ from_network(testnet) -> ?NETTYPE_TEST.
 to_network(?NETTYPE_MAIN) -> mainnet;
 to_network(?NETTYPE_TEST) -> testnet.
 
+-spec key_size_bytes(non_neg_integer()) -> pos_integer().
+key_size_bytes(?KEYTYPE_ED25519) ->
+    32;
+key_size_bytes(?KEYTYPE_ECC_COMPACT) ->
+    32;
+key_size_bytes(KeyType) ->
+    error({bad_key_type, KeyType}).
+
 %% @doc Verifies a binary against a given digital signature over the
 %% sha256 of the binary.
 -spec verify(binary(), binary(), pubkey()) -> boolean().
+verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
+    try
+        {Keys, KeysLen} = multisig_parse_keys(MultiSignature, N),
+        N = length(Keys),
+        <<KeysBin:KeysLen/binary, ISigsBin/binary>> = MultiSignature,
+        case multihash:decode(KeysDigest) of
+            {error, _} ->
+                false;
+            {ok, _, HashType, _} ->
+                case multihash:hash(KeysBin, HashType) of
+                    <<KeysDigest/binary>> ->
+                        ISigs = multisig_parse_isigs(ISigsBin, M, N),
+                        %% Reject dup key index
+                        case ISigs -- lists:ukeysort(1, ISigs) of
+                            [] ->
+                                %% Index range: 0..N-1
+                                KS = [{lists:nth(I + 1, Keys), S} || {I, S} <- ISigs],
+                                M =< length([{} || {K, S} <- KS, verify(Bin, S, K)]);
+                            [_|_] ->
+                                false
+                        end;
+                    <<_/binary>> ->
+                        false
+                end
+        end
+    catch _:_ ->
+              false
+    end;
 verify(Bin, Signature, {ecc_compact, PubKey}) ->
     public_key:verify(Bin, sha256, Signature, PubKey);
 verify(Bin, Signature, {ed25519, PubKey}) ->
     enacl:sign_verify_detached(Signature, Bin, PubKey).
+
+-spec multisig_parse_keys(binary(), non_neg_integer()) ->
+    {[pubkey()], non_neg_integer()}.
+multisig_parse_keys(<<MultiSignature/binary>>, N) ->
+    multisig_parse_keys(MultiSignature, N, 0, []).
+
+multisig_parse_keys(<<_/binary>>, 0, ConsumedBytes, Keys) ->
+    {lists:reverse(Keys), ConsumedBytes};
+multisig_parse_keys(<<NetType:4, KeyType:4, Rest0/binary>>, N, ConsumedBytes0, Keys) ->
+    Size = key_size_bytes(KeyType),
+    <<KeyBin:Size/bytes, Rest1/binary>> = Rest0,
+    Key = bin_to_pubkey(<<NetType:4, KeyType:4, KeyBin:Size/binary>>),
+    ConsumedBytes1 = ConsumedBytes0 + 1 + Size, % 1 for (NetType + KeyType)
+    multisig_parse_keys(Rest1, N - 1, ConsumedBytes1, [Key | Keys]);
+multisig_parse_keys(<<_/binary>>, _, _, _) ->
+    error(multisig_keys_misaligned). % TODO Result type
+
+-spec multisig_parse_isigs(binary(), pos_integer(), pos_integer()) ->
+    [{non_neg_integer(), binary()}].
+multisig_parse_isigs(<<ISigsBin/binary>>, M, N) ->
+    multisig_parse_isigs(ISigsBin, M, N, []).
+
+multisig_parse_isigs(<<>>, _, _, ISigs) ->
+    ISigs;
+multisig_parse_isigs(
+    <<I:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+      ByteLen:?MULTISIG_SIG_LEN_BYTES/integer-unsigned-little,
+      Rest0/binary>>,
+    M,
+    N,
+    ISigs
+) ->
+    %% Indices are in the range 0..N-1
+    case I >= N of
+        true ->
+            error({multisig_parse_isigs, invalid_index});
+        false ->
+            <<Sig:ByteLen/binary, Rest1/binary>> = Rest0,
+            multisig_parse_isigs(Rest1, M, N, [{I, Sig} | ISigs])
+    end;
+multisig_parse_isigs(<<_/binary>>, _, _, _) ->
+    error({multisig_parse_isigs, misaligned}).
 
 %% @doc Convert a binary to a base58 check encoded string. The encoded
 %% version is set to 0.
@@ -370,9 +518,364 @@ base58check_decode(B58) ->
             {error, bad_checksum}
     end.
 
+-spec pubkey_is_multisig(pubkey()) -> boolean().
+pubkey_is_multisig({multisig, _, _, _}) ->
+    true;
+pubkey_is_multisig({ecc_compact, _}) ->
+    false;
+pubkey_is_multisig({ed25519, _}) ->
+    false.
+
+%% @doc The binary form of this multisig-pubkey can be optained with
+%% pubkey_to_bin (just as any other pubkey), the format of which will be
+%% roughly:
+%%
+%%     <<NetType:4, KeyType:4, M/integer, N/integer, KeysDigest/binary>>
+%%
+%% (for precise sizes and KeyType value, see: bin_to_pubkey and pubkey_to_bin)
+%% @end
+-spec make_multisig_pubkey(pos_integer(), pos_integer(), [pubkey()]) ->
+    {ok, binary()} | {error, Error} when
+    Error :: {contains_multisig_keys, [pubkey()]}.
+make_multisig_pubkey(M, N, PubKeys) ->
+    make_multisig_pubkey(M, N, PubKeys, ?MULTI_HASH_TYPE_DEFAULT).
+
+-spec make_multisig_pubkey(pos_integer(), pos_integer(), [pubkey()], HashType) ->
+    {ok, binary()} | {error, Error} when
+    Error ::
+        {contains_multisig_keys, [pubkey()]}
+        | {hash_type_unknown, HashType}
+        | {hash_type_unsupported, HashType},
+    HashType :: atom().
+make_multisig_pubkey(M, N, PubKeys, HashType) ->
+    case lists:member(HashType, ?MULTI_HASH_TYPES_ALL) of
+        true ->
+            case lists:member(HashType, ?MULTI_HASH_TYPES_SUPPORTED) of
+                true ->
+                    make_multisig_pubkey_(M, N, PubKeys, HashType);
+                false ->
+                    {error, {hash_type_unsupported, HashType}}
+            end;
+        false ->
+            {error, {hash_type_unknown, HashType}}
+    end.
+
+-spec make_multisig_pubkey_(pos_integer(), pos_integer(), [pubkey()], HashType) ->
+    {ok, binary()} | {error, Error} when
+    Error :: {contains_multisig_keys, [pubkey()]},
+    HashType :: atom().
+make_multisig_pubkey_(M, N, PubKeys, HashType) ->
+    case lists:filter(fun pubkey_is_multisig/1, PubKeys) of
+        [_|_]=PKs ->
+            {error, {contains_multisig_keys, PKs}};
+        [] ->
+            PubKeysBins = lists:map(fun pubkey_to_bin/1, PubKeys),
+            PubKeysBin = iolist_to_binary(PubKeysBins),
+            {ok, {multisig, M, N, multihash:hash(PubKeysBin, HashType)}}
+    end.
+
+%% @doc A multisig-signature is a concatanation of a list of N
+%% individual-pubkeys and a list of M-N triples of individual-signatures
+%% prefixed with an index (of corresponsing individual-pubkey in the
+%% multisig-pubkey) and the length of the individual-signature:
+%%
+%% <<PubKeys/binary, Triples/binary>>
+%% where
+%% Pubkeys = <<PK0/binary, ..., PKN/binary>>
+%% Triples =
+%%   <<
+%%     0/integer, Len0/integer Sig0:Len0/binary,
+%%     ...,
+%%     N/integer, LenN/integer, SigN/binary
+%%   >>
+%%
+%% (see for precise sizes see: isig_to_bin, multisig_parse_isigs)
+%%
+%% PubKeys MUST be in the same order as when each signature-triple was constructed.
+%% Signature-triples MAY be in any order.
+%% @end
+-spec make_multisig_signature(
+    binary(),
+    pubkey_multi(),
+    [pubkey_single()],
+    [{non_neg_integer(), binary()}]
+) -> {ok, binary()} | {error, Error} when
+    Error ::
+        insufficient_signatures
+        | insufficient_keys
+        | too_many_keys
+        | bad_key_digest
+        | {invalid_signatures, [binary()]}.
+make_multisig_signature(_, {multisig, M, _, _}, _, S) when M > length(S) ->
+    {error, insufficient_signatures};
+make_multisig_signature(_, {multisig, _, N, _}, K, _) when N > length(K) ->
+    {error, insufficient_keys};
+make_multisig_signature(_, {multisig, _, N, _}, K, _) when N < length(K) ->
+    {error, too_many_keys};
+make_multisig_signature(Msg, {multisig, _, _, KeysDigest}, Keys, ISigs) ->
+    {ok, _, HashType, _} = multihash:decode(KeysDigest),
+    KeysBin = iolist_to_binary(lists:map(fun pubkey_to_bin/1, Keys)),
+    case multihash:hash(KeysBin, HashType) of
+        <<KeysDigest/binary>> ->
+            KeySigs = [{lists:nth(I + 1, Keys), S} || {I, S} <- ISigs],
+            case [S || {K, S} <- KeySigs, not verify(Msg, S, K)] of
+                [] ->
+                    ISigsBins = lists:map(fun isig_to_bin/1, ISigs),
+                    {ok, iolist_to_binary([KeysBin, ISigsBins])};
+                [_|_]=Sigs ->
+                    {error, {invalid_signatures, Sigs}}
+            end;
+        <<_/binary>> ->
+            {error, bad_key_digest}
+    end.
+
+-spec isig_to_bin({non_neg_integer(), binary()}) -> binary().
+isig_to_bin({I, <<Sig/binary>>}) ->
+    Len = byte_size(Sig),
+    <<
+        I:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+        Len:?MULTISIG_SIG_LEN_BYTES/integer-unsigned-little,
+        Sig/binary
+    >>.
+
 -ifdef(TEST).
 
 -include_lib("eunit/include/eunit.hrl").
+
+%% @doc Generates an EUnit test-set from the given parameters.
+%% For test-set representation details see:
+%% http://erlang.org/doc/apps/eunit/chapter.html#eunit-test-representation
+%% @end
+make_multisig_test_cases(M, N, HashType, KeyType) ->
+    Title =
+        fun (Name) ->
+            lists:flatten(io_lib:format(
+                "Multisig test: ~s. Params: [M:~b, N:~b, HashType:~s, KeyType:~s].",
+                [Name, M, N, HashType, KeyType]
+             ))
+        end,
+    %% TODO PropEr?
+    MsgGood = <<"I'm in dire need of HNT and communications to reach others seem abortive.">>,
+    ISigsToBin = fun (ISigs) -> lists:map(fun isig_to_bin/1, ISigs) end,
+    KeySig =
+        fun () ->
+            #{secret := SK, public := PK} = generate_keys(KeyType),
+            {PK, (mk_sig_fun(SK))(MsgGood)}
+        end,
+    IKeySigs = [{I, KeySig()} || I <- lists:seq(0, N - 1)],
+    Keys0 = [K || {_, {K, _}} <- IKeySigs],
+    Keys = lists:map(fun pubkey_to_bin/1, Keys0),
+    ISigs = list_shuffle(lists:sublist([{I, S} || {I, {_, S}} <- IKeySigs], M)),
+    KeysDigest = multihash:hash(iolist_to_binary(Keys), HashType),
+    {ok, MultiPubKeyGood} = make_multisig_pubkey_(M, N, Keys0, HashType),
+    {ok, MultiSigGood} = make_multisig_signature(MsgGood, MultiPubKeyGood, Keys0, ISigs),
+
+    Positive =
+        [
+            %% pubkey
+            {
+                Title("pubkey serialization round trip"),
+                ?_assertEqual(MultiPubKeyGood, bin_to_pubkey(pubkey_to_bin(MultiPubKeyGood)))
+            },
+            {
+                Title("pubkey_is_multisig"),
+                ?_assert(pubkey_is_multisig(MultiPubKeyGood))
+            },
+            {
+                Title("pubkey multihash support check"),
+                case lists:member(HashType, ?MULTI_HASH_TYPES_SUPPORTED) of
+                    true ->
+                        ?_assertEqual(
+                            {ok, MultiPubKeyGood},
+                            make_multisig_pubkey(M, N, Keys0, HashType)
+                        );
+                    false ->
+                        ?_assertEqual(
+                            {error, {hash_type_unsupported, HashType}},
+                            make_multisig_pubkey(M, N, Keys0, HashType)
+                        )
+                end
+            },
+
+            %% sig
+            {
+                Title("Everything validly constructed"),
+                ?_assert(verify(MsgGood, MultiSigGood, MultiPubKeyGood))
+            }
+        ],
+    Negative =
+        [
+            (fun() ->
+                HT = trust_me_im_a_valid_hash_type,
+                ?_assertEqual(
+                    {error, {hash_type_unknown, HT}},
+                    make_multisig_pubkey(M, N, Keys0, HT)
+                )
+            end)(),
+            ?_assertEqual(
+                {error, insufficient_signatures},
+                make_multisig_signature(
+                    MsgGood,
+                    MultiPubKeyGood,
+                    Keys0,
+                    lists:sublist(ISigs, M - 1)
+                )
+            ),
+            ?_assertEqual(
+                {error, insufficient_keys},
+                make_multisig_signature(
+                    MsgGood,
+                    MultiPubKeyGood,
+                    lists:sublist(Keys0, M - 1),
+                    ISigs
+                )
+            ),
+            ?_assertEqual(
+                {error, too_many_keys},
+                make_multisig_signature(
+                    MsgGood,
+                    MultiPubKeyGood,
+                    lists:duplicate(N + 1, hd(Keys0)),
+                    ISigs
+                )
+            ),
+            {
+                Title("make_multisig_signature with a wrong member key"),
+                ?_assertEqual(
+                    {error, bad_key_digest},
+                    %% To hit this exact error we need valid:
+                    %% - M
+                    %% - N
+                    %% - hash function and type
+                    %% - key formats
+                    %% - key count
+                    %% BUT at least one of the member keys to be different from
+                    %% what we expect:
+                    make_multisig_signature(
+                        MsgGood,
+                        {multisig, M, N,
+                            multihash:hash(
+                                (fun() ->
+                                    {K, _} = KeySig(),
+                                    iolist_to_binary([pubkey_to_bin(K) | tl(Keys)])
+                                 end)(),
+                                HashType
+                            )
+                        },
+                        Keys0,
+                        ISigs
+                    )
+                )
+            },
+            {
+                Title("Break index on a random isig, by pushing it out of range"),
+                (fun () ->
+                    R = rand:uniform(M) - 1, % Correct for 0-index
+                    Replace =
+                        fun ({I, S}) when I =:= R -> {N + 1, S}; (IS) -> IS end,
+                    ISigsOutOfRange = lists:map(Replace, ISigs),
+                    SigBad = iolist_to_binary([Keys, ISigsToBin(ISigsOutOfRange)]),
+                    ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyGood))
+                end)()
+            },
+            {
+                Title("Wrong message string"),
+                ?_assertNot(verify(
+                    <<MsgGood/binary, "totally not a scam">>,
+                    MultiSigGood,
+                    MultiPubKeyGood
+                ))
+            },
+            {
+                Title("Multisig with appended junk"),
+                ?_assertNot(verify(
+                    MsgGood,
+                    <<MultiSigGood/binary, "looks legit">>,
+                    MultiPubKeyGood
+                ))
+            },
+            {
+                Title("Pubkey with junk appended to keys digest"),
+                ?_assertNot(verify(
+                    MsgGood,
+                    MultiSigGood,
+                    {multisig, M, N, <<KeysDigest/binary, "hi">>}
+                ))
+            },
+            {
+                Title("Pubkey M > N"),
+                ?_assertNot(verify(
+                    MsgGood,
+                    MultiSigGood,
+                    {multisig, N + 1, N, KeysDigest}
+                ))
+            },
+            {
+                Title("Pubkey N < M"),
+                ?_assertNot(verify(
+                    MsgGood,
+                    MultiSigGood,
+                    {multisig, M, M - 1, KeysDigest}
+                ))
+            },
+            {
+                Title("Pubkey M + 1"),
+                ?_assertNot(verify(
+                    MsgGood,
+                    MultiSigGood,
+                    {multisig, M + 1, N, KeysDigest}
+                ))
+            },
+            {
+                Title("Pubkey N + 1"),
+                ?_assertNot(verify(
+                    MsgGood,
+                    MultiSigGood,
+                    {multisig, M, N + 1, KeysDigest}
+                ))
+            }
+        ]
+        ++
+        case Keys of
+            [K1, K2 | Ks] ->
+                [{
+                    Title("Re-ordered keys"),
+                    ?_assertNot(verify(
+                        MsgGood,
+                        iolist_to_binary([[K2, K1 | Ks], ISigsToBin(ISigs)]),
+                        MultiPubKeyGood
+                    ))
+                }];
+            [_] ->
+                []
+        end
+        ++
+        case M > 1 of
+            false ->
+                [];
+            true ->
+                [IS | _] = ISigs,
+                SigBad =
+                    [iolist_to_binary([Keys, ISigsToBin(lists:duplicate(M, IS))])],
+                [{
+                    Title("Reuse same signature M times"),
+                    ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyGood))
+                }]
+        end,
+    Positive ++ Negative.
+
+multisig_test_() ->
+    Params =
+        [
+            [M, N, H, K]
+        ||
+            N <- lists:seq(1, 10),
+            M <- lists:seq(1, N),
+            %% TODO Maybe heterogeneous combinations of hash and key types?
+            H <- ?MULTI_HASH_TYPES_ALL,
+            K <- [ed25519, ecc_compact]
+        ],
+    {inparallel, test_generator(fun make_multisig_test_cases/4, Params)}.
 
 save_load_test() ->
     SaveLoad = fun(Network, KeyType) ->
@@ -562,8 +1065,35 @@ helium_wallet_decode_ecc_compact_test() ->
     ?assertEqual(FakeTestnetKeyMap, KeyMap),
     ok.
 
+%% Test helpers ===============================================================
+
 nonl([$\n | T]) -> nonl(T);
 nonl([H | T]) -> [H | nonl(T)];
 nonl([]) -> [].
+
+test_generator(F, Params) ->
+    Next =
+        fun() ->
+            case Params of
+                [] -> [];
+                [P | Ps] -> [apply(F, P) | test_generator(F, Ps)]
+            end
+        end,
+    {generator, Next}.
+
+-spec array_shuffle(array:array(A)) -> array:array(A).
+array_shuffle(A0) ->
+    array:foldl(
+        fun (I, X, A1) ->
+            J = rand:uniform(I + 1) - 1,
+            array:set(J, X, array:set(I, array:get(J, A1), A1))
+        end,
+        array:new(),
+        A0
+    ).
+
+-spec list_shuffle([A]) -> [A].
+list_shuffle(L) ->
+    array:to_list(array_shuffle(array:from_list(L))).
 
 -endif.

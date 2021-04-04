@@ -25,7 +25,7 @@ cover:
 	$(REBAR) cover
 
 test:
-	$(REBAR) as test do eunit
+	$(REBAR) as test do eunit, cover
 
 ci:
 	$(REBAR) as test do eunit,cover && $(REBAR) do xref, dialyzer
@@ -33,7 +33,7 @@ ci:
 	codecov --required -f _build/test/covertool/libp2p_crypto.covertool.xml
 
 typecheck:
-	$(REBAR) dialyzer
+	$(REBAR) do dialyzer, xref
 
 doc:
 	$(REBAR) edoc
