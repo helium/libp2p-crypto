@@ -4,10 +4,12 @@
 
 -export([prop_multipubkey_test/0]).
 
+-define(HASHTYPE, sha256).
+
 prop_multipubkey_test() ->
     ?FORALL(
-        {KeyType, {M, N}, HashType, Msg},
-        {gen_keytype(), gen_m_n(), gen_hashtype(), gen_msg()},
+        {KeyType, {M, N}, Msg},
+        {gen_keytype(), gen_m_n(), gen_msg()},
         begin
             KeySig = fun() ->
                 #{secret := SK, public := PK} = libp2p_crypto:generate_keys(KeyType),
@@ -19,7 +21,7 @@ prop_multipubkey_test() ->
 
             Keys0 = [K || {_, {K, _}} <- IKeySigs],
 
-            {ok, MultiPubKey} = libp2p_crypto:make_multisig_pubkey(M, N, Keys0, HashType),
+            {ok, MultiPubKey} = libp2p_crypto:make_multisig_pubkey(M, N, Keys0, ?HASHTYPE),
             {ok, MultiSig} = libp2p_crypto:make_multisig_signature(Msg, MultiPubKey, Keys0, ISigs),
 
             ?WHENFAIL(
@@ -27,7 +29,6 @@ prop_multipubkey_test() ->
                     io:format("M ~p~n", [M]),
                     io:format("N ~p~n", [N]),
                     io:format("Msg ~p~n", [Msg]),
-                    io:format("HashType ~p~n", [HashType]),
                     io:format("MultiPubKey ~p~n", [MultiPubKey]),
                     io:format("MultiSig ~p~n", [MultiSig])
                 end,
@@ -48,18 +49,19 @@ gen_keytype() ->
 gen_m_n() ->
     ?SUCHTHAT({M, N}, {int(), int()}, (N > M andalso N =< 255 andalso M >= 1)).
 
-gen_hashtype() ->
-    elements([
-        sha256,
-        sha256_dbl,
-        sha512,
-        sha3_224,
-        sha3_256,
-        sha3_384,
-        sha3_512,
-        shake128,
-        shake256
-    ]).
-
 gen_msg() ->
     binary(32).
+
+%% NOTE: Use this generator if we ever support other hashtypes
+%% gen_hashtype() ->
+%%     elements([
+%%         sha256,
+%%         sha256_dbl,
+%%         sha512,
+%%         sha3_224,
+%%         sha3_256,
+%%         sha3_384,
+%%         sha3_512,
+%%         shake128,
+%%         shake256
+%%     ]).
