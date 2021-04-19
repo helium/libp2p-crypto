@@ -374,8 +374,7 @@ key_size_bytes(?KEYTYPE_ECC_COMPACT) ->
 key_size_bytes(KeyType) ->
     error({bad_key_type, KeyType}).
 
-%% @doc Verifies a binary against a given digital signature over the
-%% sha256 of the binary.
+%% @doc Verifies a binary against a given digital signature.
 -spec verify(binary(), binary(), pubkey()) -> boolean().
 verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
     try
