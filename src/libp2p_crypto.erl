@@ -95,7 +95,8 @@
     keys_from_bin/1,
     make_multisig_pubkey/3,
     make_multisig_pubkey/4,
-    make_multisig_signature/4
+    make_multisig_signature/4,
+    pubkey_is_multisig/1
 ]).
 
 -define(network, libp2p_crypto_network).
