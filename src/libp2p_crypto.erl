@@ -20,17 +20,24 @@
 
 %% TODO Expose list of hash types from multihash lib?
 -define(MULTI_HASH_TYPES_ALL, [
-    sha256,
-    sha256_dbl,
-    sha512,
+    identity,
+    sha1,
+    sha2_256,
+    sha2_512,
     sha3_224,
     sha3_256,
     sha3_384,
     sha3_512,
-    shake128,
-    shake256
+    keccak224,
+    keccak256,
+    keccak384,
+    keccak512,
+    blake2b256,
+    blake2b512,
+    blake2s128,
+    blake2s256
 ]).
--define(MULTI_HASH_TYPE_DEFAULT, sha256).
+-define(MULTI_HASH_TYPE_DEFAULT, sha2_256).
 -define(MULTI_HASH_TYPES_SUPPORTED, [?MULTI_HASH_TYPE_DEFAULT]).
 -define(MULTI_HASH_TYPES_DEPRECATED, []). % TODO Where to use?
 
@@ -321,10 +328,10 @@ bin_to_pubkey(
         true ->
             case M =< N of
                 true ->
-                    case multihash:decode(KeysDigest) of
+                    case multihash:hash(KeysDigest) of
                         {error, Reason} ->
                             erlang:error({bad_multihash, Reason});
-                        {ok, _, _, _} ->
+                        {ok, _} ->
                             {multisig, M, N, KeysDigest}
                     end;
                 false ->
@@ -382,12 +389,12 @@ verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
         {Keys, KeysLen} = multisig_parse_keys(MultiSignature, N),
         N = length(Keys),
         <<KeysBin:KeysLen/binary, ISigsBin/binary>> = MultiSignature,
-        case multihash:decode(KeysDigest) of
+        case multihash:hash(KeysDigest) of
             {error, _} ->
                 false;
-            {ok, _, HashType, _} ->
-                case multihash:hash(KeysBin, HashType) of
-                    <<KeysDigest/binary>> ->
+            {ok, HashType} ->
+                case multihash:digest(KeysBin, HashType) of
+                    {ok, <<KeysDigest/binary>>} ->
                         ISigs = multisig_parse_isigs(ISigsBin, M, N),
                         %% Reject dup key index
                         case ISigs -- lists:ukeysort(1, ISigs) of
@@ -398,7 +405,9 @@ verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
                             [_|_] ->
                                 false
                         end;
-                    <<_/binary>> ->
+                    {ok, <<_/binary>>} ->
+                        false;
+                    {error, _} ->
                         false
                 end
         end
@@ -562,16 +571,21 @@ make_multisig_pubkey(M, N, PubKeys, HashType) ->
 
 -spec make_multisig_pubkey_(pos_integer(), pos_integer(), [pubkey()], HashType) ->
     {ok, binary()} | {error, Error} when
-    Error :: {contains_multisig_keys, [pubkey()]},
+    Error :: {contains_multisig_keys, [pubkey()]}
+        | {multihash_failure, Reason :: term()},
     HashType :: atom().
 make_multisig_pubkey_(M, N, PubKeys, HashType) ->
     case lists:filter(fun pubkey_is_multisig/1, PubKeys) of
         [_|_]=PKs ->
             {error, {contains_multisig_keys, PKs}};
         [] ->
-            PubKeysBins = lists:map(fun pubkey_to_bin/1, PubKeys),
-            PubKeysBin = iolist_to_binary(PubKeysBins),
-            {ok, {multisig, M, N, multihash:hash(PubKeysBin, HashType)}}
+            PubKeysBin = iolist_to_binary([pubkey_to_bin(PK) || PK <- PubKeys]),
+            case multihash:digest(PubKeysBin, HashType) of
+                {ok, <<KeysDigest/binary>>} ->
+                    {ok, {multisig, M, N, KeysDigest}};
+                {error, Reason} ->
+                    {error, {multihash_failure, Reason}}
+            end
     end.
 
 %% @doc A multisig-signature is a concatanation of a list of N
@@ -613,10 +627,10 @@ make_multisig_signature(_, {multisig, _, N, _}, K, _) when N > length(K) ->
 make_multisig_signature(_, {multisig, _, N, _}, K, _) when N < length(K) ->
     {error, too_many_keys};
 make_multisig_signature(Msg, {multisig, _, _, KeysDigest}, Keys, ISigs) ->
-    {ok, _, HashType, _} = multihash:decode(KeysDigest),
+    {ok, HashType} = multihash:hash(KeysDigest),
     KeysBin = iolist_to_binary(lists:map(fun pubkey_to_bin/1, Keys)),
-    case multihash:hash(KeysBin, HashType) of
-        <<KeysDigest/binary>> ->
+    case multihash:digest(KeysBin, HashType) of
+        {ok, <<KeysDigest/binary>>} ->
             KeySigs = [{lists:nth(I + 1, Keys), S} || {I, S} <- ISigs],
             case [S || {K, S} <- KeySigs, not verify(Msg, S, K)] of
                 [] ->
@@ -625,7 +639,9 @@ make_multisig_signature(Msg, {multisig, _, _, KeysDigest}, Keys, ISigs) ->
                 [_|_]=Sigs ->
                     {error, {invalid_signatures, Sigs}}
             end;
-        <<_/binary>> ->
+        {ok, <<_/binary>>} ->
+            {error, bad_key_digest};
+        {error, _} ->
             {error, bad_key_digest}
     end.
 
@@ -666,7 +682,7 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
     Keys0 = [K || {_, {K, _}} <- IKeySigs],
     Keys = lists:map(fun pubkey_to_bin/1, Keys0),
     ISigs = list_shuffle(lists:sublist([{I, S} || {I, {_, S}} <- IKeySigs], M)),
-    KeysDigest = multihash:hash(iolist_to_binary(Keys), HashType),
+    {ok, KeysDigest} = multihash:digest(iolist_to_binary(Keys), HashType),
     {ok, MultiPubKeyGood} = make_multisig_pubkey_(M, N, Keys0, HashType),
     {ok, MultiSigGood} = make_multisig_signature(MsgGood, MultiPubKeyGood, Keys0, ISigs),
 
@@ -754,13 +770,15 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
                     make_multisig_signature(
                         MsgGood,
                         {multisig, M, N,
-                            multihash:hash(
-                                (fun() ->
-                                    {K, _} = KeySig(),
-                                    iolist_to_binary([pubkey_to_bin(K) | tl(Keys)])
-                                 end)(),
-                                HashType
-                            )
+                            (fun() ->
+                                {K, _} = KeySig(),
+                                {ok, BadKeysDigest} =
+                                    multihash:digest(
+                                        iolist_to_binary([pubkey_to_bin(K) | tl(Keys)]),
+                                        HashType
+                                    ),
+                                BadKeysDigest
+                            end)()
                         },
                         Keys0,
                         ISigs
