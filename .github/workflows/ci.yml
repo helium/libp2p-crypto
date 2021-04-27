@@ -15,6 +15,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
+      - name: Rust Toolchain
+        run: rustup default stable
+
       - name: Cache Hex Packages
         uses: actions/cache@v1
         with:
