@@ -100,9 +100,9 @@
     verify/3,
     keys_to_bin/1,
     keys_from_bin/1,
-    make_multisig_pubkey/3,
     make_multisig_pubkey/4,
-    make_multisig_signature/4,
+    make_multisig_pubkey/5,
+    make_multisig_signature/5,
     pubkey_is_multisig/1
 ]).
 
@@ -429,7 +429,7 @@ multisig_parse_keys(<<_/binary>>, 0, ConsumedBytes, Keys) ->
 multisig_parse_keys(<<NetType:4, KeyType:4, Rest0/binary>>, N, ConsumedBytes0, Keys) ->
     Size = key_size_bytes(KeyType),
     <<KeyBin:Size/bytes, Rest1/binary>> = Rest0,
-    Key = bin_to_pubkey(<<NetType:4, KeyType:4, KeyBin:Size/binary>>),
+    Key = bin_to_pubkey(to_network(NetType), <<NetType:4, KeyType:4, KeyBin:Size/binary>>),
     ConsumedBytes1 = ConsumedBytes0 + 1 + Size, % 1 for (NetType + KeyType)
     multisig_parse_keys(Rest1, N - 1, ConsumedBytes1, [Key | Keys]);
 multisig_parse_keys(<<_/binary>>, _, _, _) ->
@@ -543,25 +543,25 @@ pubkey_is_multisig({ed25519, _}) ->
 %%
 %% (for precise sizes and KeyType value, see: bin_to_pubkey and pubkey_to_bin)
 %% @end
--spec make_multisig_pubkey(pos_integer(), pos_integer(), [pubkey()]) ->
+-spec make_multisig_pubkey(network(), pos_integer(), pos_integer(), [pubkey()]) ->
     {ok, binary()} | {error, Error} when
     Error :: {contains_multisig_keys, [pubkey()]}.
-make_multisig_pubkey(M, N, PubKeys) ->
-    make_multisig_pubkey(M, N, PubKeys, ?MULTI_HASH_TYPE_DEFAULT).
+make_multisig_pubkey(Network, M, N, PubKeys) ->
+    make_multisig_pubkey(Network, M, N, PubKeys, ?MULTI_HASH_TYPE_DEFAULT).
 
--spec make_multisig_pubkey(pos_integer(), pos_integer(), [pubkey()], HashType) ->
+-spec make_multisig_pubkey(network(), pos_integer(), pos_integer(), [pubkey()], HashType) ->
     {ok, binary()} | {error, Error} when
     Error ::
         {contains_multisig_keys, [pubkey()]}
         | {hash_type_unknown, HashType}
         | {hash_type_unsupported, HashType},
     HashType :: atom().
-make_multisig_pubkey(M, N, PubKeys, HashType) ->
+make_multisig_pubkey(Network, M, N, PubKeys, HashType) ->
     case lists:member(HashType, ?MULTI_HASH_TYPES_ALL) of
         true ->
             case lists:member(HashType, ?MULTI_HASH_TYPES_SUPPORTED) of
                 true ->
-                    make_multisig_pubkey_(M, N, PubKeys, HashType);
+                    make_multisig_pubkey_(Network, M, N, PubKeys, HashType);
                 false ->
                     {error, {hash_type_unsupported, HashType}}
             end;
@@ -569,17 +569,17 @@ make_multisig_pubkey(M, N, PubKeys, HashType) ->
             {error, {hash_type_unknown, HashType}}
     end.
 
--spec make_multisig_pubkey_(pos_integer(), pos_integer(), [pubkey()], HashType) ->
+-spec make_multisig_pubkey_(network(), pos_integer(), pos_integer(), [pubkey()], HashType) ->
     {ok, binary()} | {error, Error} when
     Error :: {contains_multisig_keys, [pubkey()]}
         | {multihash_failure, Reason :: term()},
     HashType :: atom().
-make_multisig_pubkey_(M, N, PubKeys, HashType) ->
+make_multisig_pubkey_(Network, M, N, PubKeys, HashType) ->
     case lists:filter(fun pubkey_is_multisig/1, PubKeys) of
         [_|_]=PKs ->
             {error, {contains_multisig_keys, PKs}};
         [] ->
-            PubKeysBin = iolist_to_binary([pubkey_to_bin(PK) || PK <- PubKeys]),
+            PubKeysBin = iolist_to_binary([pubkey_to_bin(Network, PK) || PK <- PubKeys]),
             case multihash:digest(PubKeysBin, HashType) of
                 {ok, <<KeysDigest/binary>>} ->
                     {ok, {multisig, M, N, KeysDigest}};
@@ -609,6 +609,7 @@ make_multisig_pubkey_(M, N, PubKeys, HashType) ->
 %% Signature-triples MAY be in any order.
 %% @end
 -spec make_multisig_signature(
+    network(),
     binary(),
     pubkey_multi(),
     [pubkey_single()],
@@ -620,15 +621,16 @@ make_multisig_pubkey_(M, N, PubKeys, HashType) ->
         | too_many_keys
         | bad_key_digest
         | {invalid_signatures, [binary()]}.
-make_multisig_signature(_, {multisig, M, _, _}, _, S) when M > length(S) ->
+make_multisig_signature(_, _, {multisig, M, _, _}, _, S) when M > length(S) ->
     {error, insufficient_signatures};
-make_multisig_signature(_, {multisig, _, N, _}, K, _) when N > length(K) ->
+make_multisig_signature(_, _, {multisig, _, N, _}, K, _) when N > length(K) ->
     {error, insufficient_keys};
-make_multisig_signature(_, {multisig, _, N, _}, K, _) when N < length(K) ->
+make_multisig_signature(_, _, {multisig, _, N, _}, K, _) when N < length(K) ->
     {error, too_many_keys};
-make_multisig_signature(Msg, {multisig, _, _, KeysDigest}, Keys, ISigs) ->
+make_multisig_signature(Network, Msg, {multisig, _, _, KeysDigest}, Keys, ISigs) ->
     {ok, HashType} = multihash:hash(KeysDigest),
-    KeysBin = iolist_to_binary(lists:map(fun pubkey_to_bin/1, Keys)),
+    PK2Bin = fun(PK) -> pubkey_to_bin(Network, PK) end,
+    KeysBin = iolist_to_binary(lists:map(PK2Bin, Keys)),
     case multihash:digest(KeysBin, HashType) of
         {ok, <<KeysDigest/binary>>} ->
             KeySigs = [{lists:nth(I + 1, Keys), S} || {I, S} <- ISigs],
@@ -662,12 +664,12 @@ isig_to_bin({I, <<Sig/binary>>}) ->
 %% For test-set representation details see:
 %% http://erlang.org/doc/apps/eunit/chapter.html#eunit-test-representation
 %% @end
-make_multisig_test_cases(M, N, HashType, KeyType) ->
+make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
     Title =
         fun (Name) ->
             lists:flatten(io_lib:format(
-                "Multisig test: ~s. Params: [M:~b, N:~b, HashType:~s, KeyType:~s].",
-                [Name, M, N, HashType, KeyType]
+                "Multisig test: ~s. Params: [Network: ~p, M:~b, N:~b, HashType:~s, KeyType:~s].",
+                [Name, Network, M, N, HashType, KeyType]
              ))
         end,
     %% TODO PropEr?
@@ -680,18 +682,19 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
         end,
     IKeySigs = [{I, KeySig()} || I <- lists:seq(0, N - 1)],
     Keys0 = [K || {_, {K, _}} <- IKeySigs],
-    Keys = lists:map(fun pubkey_to_bin/1, Keys0),
+    PK2Bin = fun(PK) -> pubkey_to_bin(Network, PK) end,
+    Keys = lists:map(PK2Bin, Keys0),
     ISigs = list_shuffle(lists:sublist([{I, S} || {I, {_, S}} <- IKeySigs], M)),
     {ok, KeysDigest} = multihash:digest(iolist_to_binary(Keys), HashType),
-    {ok, MultiPubKeyGood} = make_multisig_pubkey_(M, N, Keys0, HashType),
-    {ok, MultiSigGood} = make_multisig_signature(MsgGood, MultiPubKeyGood, Keys0, ISigs),
+    {ok, MultiPubKeyGood} = make_multisig_pubkey_(Network, M, N, Keys0, HashType),
+    {ok, MultiSigGood} = make_multisig_signature(Network, MsgGood, MultiPubKeyGood, Keys0, ISigs),
 
     Positive =
         [
             %% pubkey
             {
                 Title("pubkey serialization round trip"),
-                ?_assertEqual(MultiPubKeyGood, bin_to_pubkey(pubkey_to_bin(MultiPubKeyGood)))
+                ?_assertEqual(MultiPubKeyGood, bin_to_pubkey(Network, PK2Bin(MultiPubKeyGood)))
             },
             {
                 Title("pubkey_is_multisig"),
@@ -703,12 +706,12 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
                     true ->
                         ?_assertEqual(
                             {ok, MultiPubKeyGood},
-                            make_multisig_pubkey(M, N, Keys0, HashType)
+                            make_multisig_pubkey(Network, M, N, Keys0, HashType)
                         );
                     false ->
                         ?_assertEqual(
                             {error, {hash_type_unsupported, HashType}},
-                            make_multisig_pubkey(M, N, Keys0, HashType)
+                            make_multisig_pubkey(Network, M, N, Keys0, HashType)
                         )
                 end
             },
@@ -725,12 +728,13 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
                 HT = trust_me_im_a_valid_hash_type,
                 ?_assertEqual(
                     {error, {hash_type_unknown, HT}},
-                    make_multisig_pubkey(M, N, Keys0, HT)
+                    make_multisig_pubkey(Network, M, N, Keys0, HT)
                 )
             end)(),
             ?_assertEqual(
                 {error, insufficient_signatures},
                 make_multisig_signature(
+                    Network,
                     MsgGood,
                     MultiPubKeyGood,
                     Keys0,
@@ -740,6 +744,7 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
             ?_assertEqual(
                 {error, insufficient_keys},
                 make_multisig_signature(
+                    Network,
                     MsgGood,
                     MultiPubKeyGood,
                     lists:sublist(Keys0, M - 1),
@@ -749,6 +754,7 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
             ?_assertEqual(
                 {error, too_many_keys},
                 make_multisig_signature(
+                    Network,
                     MsgGood,
                     MultiPubKeyGood,
                     lists:duplicate(N + 1, hd(Keys0)),
@@ -768,13 +774,14 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
                     %% BUT at least one of the member keys to be different from
                     %% what we expect:
                     make_multisig_signature(
+                        Network,
                         MsgGood,
                         {multisig, M, N,
                             (fun() ->
                                 {K, _} = KeySig(),
                                 {ok, BadKeysDigest} =
                                     multihash:digest(
-                                        iolist_to_binary([pubkey_to_bin(K) | tl(Keys)]),
+                                        iolist_to_binary([PK2Bin(K) | tl(Keys)]),
                                         HashType
                                     ),
                                 BadKeysDigest
@@ -885,15 +892,16 @@ make_multisig_test_cases(M, N, HashType, KeyType) ->
 multisig_test_() ->
     Params =
         [
-            [M, N, H, K]
+            [Network, M, N, H, K]
         ||
             N <- lists:seq(1, 10),
             M <- lists:seq(1, N),
             %% TODO Maybe heterogeneous combinations of hash and key types?
             H <- ?MULTI_HASH_TYPES_ALL,
-            K <- [ed25519, ecc_compact]
+            K <- [ed25519, ecc_compact],
+            Network <- [mainnet, testnet]
         ],
-    {inparallel, test_generator(fun make_multisig_test_cases/4, Params)}.
+    {inparallel, test_generator(fun make_multisig_test_cases/5, Params)}.
 
 save_load_test() ->
     SaveLoad = fun(Network, KeyType) ->
