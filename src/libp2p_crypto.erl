@@ -37,8 +37,14 @@
     blake2s128,
     blake2s256
 ]).
--define(MULTI_HASH_TYPE_DEFAULT, sha2_256).
--define(MULTI_HASH_TYPES_SUPPORTED, [?MULTI_HASH_TYPE_DEFAULT]).
+-define(MULTI_HASH_TYPE_DEFAULT,
+    sha2_256
+).
+-define(MULTI_HASH_TYPES_SUPPORTED, [
+    sha2_256,
+    sha3_256,
+    blake2b256
+]).
 -define(MULTI_HASH_TYPES_DEPRECATED, []). % TODO Where to use?
 
 -type key_type() :: ecc_compact | ed25519.
