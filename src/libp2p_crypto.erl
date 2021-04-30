@@ -431,7 +431,7 @@ multisig_parse_keys(<<MultiSignature/binary>>, N) ->
     multisig_parse_keys(MultiSignature, N, 0, []).
 
 multisig_parse_keys(<<_/binary>>, 0, ConsumedBytes, Keys) ->
-    {lists:reverse(Keys), ConsumedBytes};
+    {multisig_member_keys_sort(Keys), ConsumedBytes};
 multisig_parse_keys(<<NetType:4, KeyType:4, Rest0/binary>>, N, ConsumedBytes0, Keys) ->
     Size = key_size_bytes(KeyType),
     <<KeyBin:Size/bytes, Rest1/binary>> = Rest0,
@@ -585,7 +585,7 @@ make_multisig_pubkey_(Network, M, N, PubKeys, HashType) ->
         [_|_]=PKs ->
             {error, {contains_multisig_keys, PKs}};
         [] ->
-            PubKeysBin = iolist_to_binary([pubkey_to_bin(Network, PK) || PK <- PubKeys]),
+            PubKeysBin = multisig_member_keys_to_bin(Network, PubKeys),
             case multihash:digest(PubKeysBin, HashType) of
                 {ok, <<KeysDigest/binary>>} ->
                     {ok, {multisig, M, N, KeysDigest}};
@@ -593,6 +593,27 @@ make_multisig_pubkey_(Network, M, N, PubKeys, HashType) ->
                     {error, {multihash_failure, Reason}}
             end
     end.
+
+-spec multisig_member_keys_to_bin(network(), [pubkey_single()]) -> binary().
+multisig_member_keys_to_bin(Network, PKs) ->
+    Bins = [pubkey_to_bin(Network, K) || K <- multisig_member_keys_sort(PKs)],
+    iolist_to_binary(Bins).
+
+-spec multisig_member_keys_sort([pubkey_single()]) -> [pubkey_single()].
+multisig_member_keys_sort(Keys0) ->
+    Keys1 = [{K, multisig_member_key_sort_form(K)} || K <- Keys0],
+    Cmp = fun ({_, A}, {_, B}) -> multisig_member_keys_cmp(A, B) end,
+    [K || {K, _} <- lists:sort(Cmp, Keys1)].
+
+-spec multisig_member_keys_cmp(binary(), binary()) -> boolean().
+multisig_member_keys_cmp(A, B) ->
+    A < B.
+
+-spec multisig_member_key_sort_form(pubkey_single()) -> binary().
+multisig_member_key_sort_form({multisig, _, _, _}) ->
+    error({badarg, expected_single_but_given_multisig_pubkey});
+multisig_member_key_sort_form(PK) ->
+    list_to_binary(pubkey_to_b58(PK)).
 
 %% @doc A multisig-signature is a concatanation of a list of N
 %% individual-pubkeys and a list of M-N triples of individual-signatures
@@ -635,8 +656,7 @@ make_multisig_signature(_, _, {multisig, _, N, _}, K, _) when N < length(K) ->
     {error, too_many_keys};
 make_multisig_signature(Network, Msg, {multisig, _, _, KeysDigest}, Keys, ISigs) ->
     {ok, HashType} = multihash:hash(KeysDigest),
-    PK2Bin = fun(PK) -> pubkey_to_bin(Network, PK) end,
-    KeysBin = iolist_to_binary(lists:map(PK2Bin, Keys)),
+    KeysBin = multisig_member_keys_to_bin(Network, Keys),
     case multihash:digest(KeysBin, HashType) of
         {ok, <<KeysDigest/binary>>} ->
             KeySigs = [{lists:nth(I + 1, Keys), S} || {I, S} <- ISigs],
@@ -684,14 +704,19 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
     KeySig =
         fun () ->
             #{secret := SK, public := PK} = generate_keys(KeyType),
-            {PK, (mk_sig_fun(SK))(MsgGood)}
+            {PK, multisig_member_key_sort_form(PK), (mk_sig_fun(SK))(MsgGood)}
         end,
-    IKeySigs = [{I, KeySig()} || I <- lists:seq(0, N - 1)],
+    KeySigs =
+        lists:sort(
+            fun ({_, A, _}, {_, B, _}) -> multisig_member_keys_cmp(A, B) end,
+            [KeySig() || _ <- lists:duplicate(N, {})]
+        ),
+    IKeySigs = mapi(fun({I, {K, _, S}}) -> {I, {K, S}} end, KeySigs, 0),
     Keys0 = [K || {_, {K, _}} <- IKeySigs],
     PK2Bin = fun(PK) -> pubkey_to_bin(Network, PK) end,
-    Keys = lists:map(PK2Bin, Keys0),
+    BinKeys = lists:map(PK2Bin, Keys0),
     ISigs = list_shuffle(lists:sublist([{I, S} || {I, {_, S}} <- IKeySigs], M)),
-    {ok, KeysDigest} = multihash:digest(iolist_to_binary(Keys), HashType),
+    {ok, KeysDigest} = multihash:digest(iolist_to_binary(BinKeys), HashType),
     {ok, MultiPubKeyGood} = make_multisig_pubkey_(Network, M, N, Keys0, HashType),
     {ok, MultiSigGood} = make_multisig_signature(Network, MsgGood, MultiPubKeyGood, Keys0, ISigs),
 
@@ -784,10 +809,10 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
                         MsgGood,
                         {multisig, M, N,
                             (fun() ->
-                                {K, _} = KeySig(),
+                                {_, BinKey, _} = KeySig(),
                                 {ok, BadKeysDigest} =
                                     multihash:digest(
-                                        iolist_to_binary([PK2Bin(K) | tl(Keys)]),
+                                        iolist_to_binary([BinKey | tl(BinKeys)]),
                                         HashType
                                     ),
                                 BadKeysDigest
@@ -805,7 +830,7 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
                     Replace =
                         fun ({I, S}) when I =:= R -> {N + 1, S}; (IS) -> IS end,
                     ISigsOutOfRange = lists:map(Replace, ISigs),
-                    SigBad = iolist_to_binary([Keys, ISigsToBin(ISigsOutOfRange)]),
+                    SigBad = iolist_to_binary([BinKeys, ISigsToBin(ISigsOutOfRange)]),
                     ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyGood))
                 end)()
             },
@@ -867,7 +892,7 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
             }
         ]
         ++
-        case Keys of
+        case BinKeys of
             [K1, K2 | Ks] ->
                 [{
                     Title("Re-ordered keys"),
@@ -887,7 +912,7 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
             true ->
                 [IS | _] = ISigs,
                 SigBad =
-                    [iolist_to_binary([Keys, ISigsToBin(lists:duplicate(M, IS))])],
+                    [iolist_to_binary([BinKeys, ISigsToBin(lists:duplicate(M, IS))])],
                 [{
                     Title("Reuse same signature M times"),
                     ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyGood))
@@ -1127,5 +1152,15 @@ array_shuffle(A0) ->
 -spec list_shuffle([A]) -> [A].
 list_shuffle(L) ->
     array:to_list(array_shuffle(array:from_list(L))).
+
+-spec mapi(fun(({integer(), X}) -> Y), [X]) -> [Y].
+mapi(F, Xs) ->
+    mapi(F, Xs, 1).
+
+-spec mapi(fun(({integer(), X}) -> Y), [X], integer()) -> [Y].
+mapi(_, [], _) ->
+    [];
+mapi(F, [X | Xs], I) ->
+    [F({I, X}) | mapi(F, Xs, I + 1)].
 
 -endif.
