@@ -111,6 +111,7 @@
     verify/3,
     keys_to_bin/1,
     keys_from_bin/1,
+    generate_sorted_multisig_keys/2,
     make_multisig_pubkey/4,
     make_multisig_pubkey/5,
     make_multisig_signature/5,
@@ -695,6 +696,23 @@ isig_to_bin({I, <<Sig/binary>>}) ->
         Sig/binary
     >>.
 
+-spec generate_sorted_multisig_keys(pos_integer(), key_type()) ->
+    [key_map()].
+generate_sorted_multisig_keys(N, KeyType) ->
+    lists:map(
+        fun({_, PS}) -> PS end,
+        lists:sort(
+            fun({A, _}, {B, _}) -> multisig_member_keys_cmp(A, B) end,
+            lists:map(
+                fun(_) ->
+                    PubSec = #{public := Pub} = generate_keys(KeyType),
+                    {multisig_member_key_sort_form(Pub), PubSec}
+                end,
+                lists:duplicate(N, {})
+            )
+        )
+    ).
+
 -ifdef(TEST).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -713,21 +731,9 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
         end,
     MsgGood = <<"I'm in dire need of HNT and communications to reach others seem abortive.">>,
     ISigsToBin = fun (ISigs) -> lists:map(fun isig_to_bin/1, ISigs) end,
-    KeySig =
-        fun () ->
-                #{secret := SK, public := PK} = case KeyType of
-                    random ->
-                        generate_keys(hd(list_shuffle(?PRIMITIVE_KEY_TYPES)));
-                    _ -> generate_keys(KeyType)
-                end,
-            {PK, multisig_member_key_sort_form(PK), (mk_sig_fun(SK))(MsgGood)}
-        end,
-    KeySigs =
-        lists:sort(
-            fun ({_, A, _}, {_, B, _}) -> multisig_member_keys_cmp(A, B) end,
-            [KeySig() || _ <- lists:duplicate(N, {})]
-        ),
-    IKeySigs = mapi(fun({I, {K, _, S}}) -> {I, {K, S}} end, KeySigs, 0),
+    KeyMaps = generate_sorted_multisig_keys(N, KeyType),
+    KeySigs = [{P, (mk_sig_fun(S))(MsgGood)} || #{secret := S, public := P} <- KeyMaps],
+    IKeySigs = mapi(fun(X) -> X end, KeySigs, 0),
     Keys0 = [K || {_, {K, _}} <- IKeySigs],
     PK2Bin = fun(PK) -> pubkey_to_bin(Network, PK) end,
     BinKeys = lists:map(PK2Bin, Keys0),
@@ -825,10 +831,10 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
                         MsgGood,
                         {multisig, M, N,
                             (fun() ->
-                                {_, BinKey, _} = KeySig(),
+                                #{public := PK} = generate_keys(KeyType),
                                 {ok, BadKeysDigest} =
                                     multihash:digest(
-                                        iolist_to_binary([BinKey | tl(BinKeys)]),
+                                        iolist_to_binary([pubkey_to_bin(PK) | tl(BinKeys)]),
                                         HashType
                                     ),
                                 BadKeysDigest
@@ -1028,7 +1034,7 @@ multisig_test_() ->
             N <- lists:seq(1, 5),
             M <- lists:seq(1, N),
             H <- HashTypes,
-            K <- [random | ?PRIMITIVE_KEY_TYPES],
+            K <- ?PRIMITIVE_KEY_TYPES,
             Network <- [mainnet, testnet]
         ],
     {inparallel, test_generator(fun make_multisig_test_cases/6, Params)}.
