@@ -447,7 +447,7 @@ multisig_parse_keys(<<NetType:4, KeyType:4, Rest0/binary>>, N, ConsumedBytes0, K
     ConsumedBytes1 = ConsumedBytes0 + 1 + Size, % 1 for (NetType + KeyType)
     multisig_parse_keys(Rest1, N - 1, ConsumedBytes1, [Key | Keys]);
 multisig_parse_keys(<<_/binary>>, _, _, _) ->
-    error(multisig_keys_misaligned).
+    erlang:error(multisig_keys_misaligned).
 
 -spec multisig_parse_isigs(binary(), pos_integer(), pos_integer()) ->
     [{non_neg_integer(), binary()}].
@@ -467,13 +467,13 @@ multisig_parse_isigs(
     %% Indices are in the range 0..N-1
     case I >= N of
         true ->
-            error({multisig_parse_isigs, invalid_index});
+            erlang:error({multisig_parse_isigs, invalid_index});
         false ->
             <<Sig:ByteLen/binary, Rest1/binary>> = Rest0,
             multisig_parse_isigs(Rest1, M, N, [{I, Sig} | ISigs])
     end;
 multisig_parse_isigs(<<_/binary>>, _, _, _) ->
-    error({multisig_parse_isigs, misaligned}).
+    erlang:error({multisig_parse_isigs, misaligned}).
 
 %% @doc Convert a binary to a base58 check encoded string. The encoded
 %% version is set to 0.
@@ -619,7 +619,7 @@ multisig_member_keys_cmp(A, B) ->
 
 -spec multisig_member_key_sort_form(pubkey_single()) -> binary().
 multisig_member_key_sort_form({multisig, _, _, _}) ->
-    error({badarg, expected_single_but_given_multisig_pubkey});
+    erlang:error({badarg, expected_single_but_given_multisig_pubkey});
 multisig_member_key_sort_form(PK) ->
     list_to_binary(pubkey_to_b58(PK)).
 
