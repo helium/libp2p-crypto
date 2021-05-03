@@ -938,25 +938,55 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
                 ))
             },
             {
-             Title("bin_to_pubkey bad multihash"),
-             ?_assertError({bad_multihash, invalid_code}, bin_to_pubkey(mainnet, <<?NETTYPE_MAIN:4, ?KEYTYPE_MULTISIG:4,
-                                                                         3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
-                                                                         5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
-                                                                         "hello world">>))
+                Title("bin_to_pubkey bad multihash"),
+                ?_assertError(
+                    {bad_multihash, invalid_code},
+                    bin_to_pubkey(
+                        Network,
+                        <<
+                            (from_network(Network)):4,
+                            ?KEYTYPE_MULTISIG:4,
+                            3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                            5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                            "hello world"
+                        >>
+                    )
+                )
             },
             {
-             Title("bin_to_pubkey m higher than N"),
-             ?_assertError({m_higher_than_n, 5, 3}, bin_to_pubkey(mainnet, <<?NETTYPE_MAIN:4, ?KEYTYPE_MULTISIG:4,
-                                                                         5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
-                                                                         3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
-                                                                         "hello world">>))
+                Title("bin_to_pubkey m higher than N"),
+                ?_assertError(
+                    {m_higher_than_n, 5, 3},
+                    bin_to_pubkey(
+                        Network,
+                        <<
+                            (from_network(Network)):4,
+                            ?KEYTYPE_MULTISIG:4,
+                            5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                            3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                            "hello world"
+                        >>
+                    )
+                )
             },
             {
-             Title("bin_to_pubkey bad nettype"),
-             ?_assertError({bad_network, 1}, bin_to_pubkey(mainnet, <<?NETTYPE_TEST:4, ?KEYTYPE_MULTISIG:4,
-                                                                         3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
-                                                                         5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
-                                                                         "hello world">>))
+                Title("bin_to_pubkey bad nettype"),
+                (fun() ->
+                    [BadNetwork] = [mainnet, testnet] -- [Network],
+                    ?_assertError(
+                        {bad_network, _},
+                        bin_to_pubkey(
+                            BadNetwork,
+                            <<
+                                (from_network(Network)):4,
+                                ?KEYTYPE_MULTISIG:4,
+                                3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                                5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                                "hello world"
+                            >>
+                        )
+                    )
+                 end)()
             }
         ]
         ++
@@ -995,7 +1025,7 @@ multisig_test_() ->
         [
             [Network, M, N, K, H, HashTypes]
         ||
-            N <- lists:seq(1, 10),
+            N <- lists:seq(1, 5),
             M <- lists:seq(1, N),
             H <- HashTypes,
             K <- [random | ?PRIMITIVE_KEY_TYPES],
