@@ -15,10 +15,15 @@
 -define(NETTYPE_MAIN, 0).
 -define(NETTYPE_TEST, 1).
 
--define(MULTISIG_SIG_LEN_BYTES,  8). % TODO Will we ever have a sig len > 65535?
--define(MULTISIG_KEY_INDEX_BITS, 8). % TODO Will we ever need more than 255 keys?
+-define(MULTISIG_SIG_LEN_BYTES,  8). %% signatures can be up to 256 bytes
+-define(MULTISIG_KEY_INDEX_BITS, 8). %% up to 256 keys
 
-%% TODO Expose list of hash types from multihash lib?
+-define(PRIMITIVE_KEY_TYPES, [
+                              ecc_compact,
+                              ed25519
+                             ]).
+
+%% used for testing and known/unknown checking
 -define(MULTI_HASH_TYPES_ALL, [
     identity,
     sha1,
@@ -45,7 +50,7 @@
     sha3_256,
     blake2b256
 ]).
--define(MULTI_HASH_TYPES_DEPRECATED, []). % TODO Where to use?
+-define(MULTI_HASH_TYPES_DEPRECATED, []). %% used ONLY in verify
 
 -type key_type() :: ecc_compact | ed25519.
 -type network() :: mainnet | testnet.
@@ -399,21 +404,24 @@ verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
             {error, _} ->
                 false;
             {ok, HashType} ->
-                case multihash:digest(KeysBin, HashType) of
-                    {ok, <<KeysDigest/binary>>} ->
-                        ISigs = multisig_parse_isigs(ISigsBin, M, N),
-                        %% Reject dup key index
-                        case ISigs -- lists:ukeysort(1, ISigs) of
-                            [] ->
-                                %% Index range: 0..N-1
-                                KS = [{lists:nth(I + 1, Keys), S} || {I, S} <- ISigs],
-                                M =< length([{} || {K, S} <- KS, verify(Bin, S, K)]);
-                            [_|_] ->
+                case lists:member(HashType, ?MULTI_HASH_TYPES_SUPPORTED ++ ?MULTI_HASH_TYPES_DEPRECATED) of
+                    true ->
+                        case multihash:digest(KeysBin, HashType) of
+                            {ok, <<KeysDigest/binary>>} ->
+                                ISigs = multisig_parse_isigs(ISigsBin, M, N),
+                                %% Reject dup key index
+                                case ISigs -- lists:ukeysort(1, ISigs) of
+                                    [] ->
+                                        %% Index range: 0..N-1
+                                        KS = [{lists:nth(I + 1, Keys), S} || {I, S} <- ISigs],
+                                        M =< length([{} || {K, S} <- KS, verify(Bin, S, K)]);
+                                    [_|_] ->
+                                        false
+                                end;
+                            _ ->
                                 false
                         end;
-                    {ok, <<_/binary>>} ->
-                        false;
-                    {error, _} ->
+                    false ->
                         false
                 end
         end
@@ -439,7 +447,7 @@ multisig_parse_keys(<<NetType:4, KeyType:4, Rest0/binary>>, N, ConsumedBytes0, K
     ConsumedBytes1 = ConsumedBytes0 + 1 + Size, % 1 for (NetType + KeyType)
     multisig_parse_keys(Rest1, N - 1, ConsumedBytes1, [Key | Keys]);
 multisig_parse_keys(<<_/binary>>, _, _, _) ->
-    error(multisig_keys_misaligned). % TODO Result type
+    error(multisig_keys_misaligned).
 
 -spec multisig_parse_isigs(binary(), pos_integer(), pos_integer()) ->
     [{non_neg_integer(), binary()}].
@@ -698,12 +706,15 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
                 [Name, Network, M, N, HashType, KeyType]
              ))
         end,
-    %% TODO PropEr?
     MsgGood = <<"I'm in dire need of HNT and communications to reach others seem abortive.">>,
     ISigsToBin = fun (ISigs) -> lists:map(fun isig_to_bin/1, ISigs) end,
     KeySig =
         fun () ->
-            #{secret := SK, public := PK} = generate_keys(KeyType),
+                #{secret := SK, public := PK} = case KeyType of
+                    random ->
+                        generate_keys(hd(list_shuffle(?PRIMITIVE_KEY_TYPES)));
+                    _ -> generate_keys(KeyType)
+                end,
             {PK, multisig_member_key_sort_form(PK), (mk_sig_fun(SK))(MsgGood)}
         end,
     KeySigs =
@@ -835,6 +846,22 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
                 end)()
             },
             {
+                Title("Duplicate sig from same index"),
+                (fun () ->
+                    SigBad = iolist_to_binary([BinKeys, ISigsToBin([hd(ISigs)|ISigs])]),
+                    ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyGood))
+                end)()
+            },
+            {
+                Title("Unsupported hash type"),
+                (fun () ->
+                    {ok, MultiPubKeyBad} = make_multisig_pubkey_(Network, M, N, Keys0, sha1),
+                    {ok, SigBad} = make_multisig_signature(Network, MsgGood, MultiPubKeyBad, Keys0, ISigs),
+                    SigBad = iolist_to_binary([BinKeys, ISigsToBin(ISigs)]),
+                    ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyBad))
+                end)()
+            },
+            {
                 Title("Wrong message string"),
                 ?_assertNot(verify(
                     <<MsgGood/binary, "totally not a scam">>,
@@ -847,6 +874,14 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
                 ?_assertNot(verify(
                     MsgGood,
                     <<MultiSigGood/binary, "looks legit">>,
+                    MultiPubKeyGood
+                ))
+            },
+            {
+                Title("Multisig with unsupported hash"),
+                ?_assertNot(verify(
+                    MsgGood,
+                    multihash:digest(iolist_to_binary(BinKeys), sha1),
                     MultiPubKeyGood
                 ))
             },
@@ -889,6 +924,27 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
                     MultiSigGood,
                     {multisig, M, N + 1, KeysDigest}
                 ))
+            },
+            {
+             Title("bin_to_pubkey bad multihash"),
+             ?_assertError({bad_multihash, invalid_code}, bin_to_pubkey(mainnet, <<?NETTYPE_MAIN:4, ?KEYTYPE_MULTISIG:4,
+                                                                         3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                                                                         5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                                                                         "hello world">>))
+            },
+            {
+             Title("bin_to_pubkey m higher than N"),
+             ?_assertError({m_higher_than_n, 5, 3}, bin_to_pubkey(mainnet, <<?NETTYPE_MAIN:4, ?KEYTYPE_MULTISIG:4,
+                                                                         5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                                                                         3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                                                                         "hello world">>))
+            },
+            {
+             Title("bin_to_pubkey bad nettype"),
+             ?_assertError({bad_network, 1}, bin_to_pubkey(mainnet, <<?NETTYPE_TEST:4, ?KEYTYPE_MULTISIG:4,
+                                                                         3:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                                                                         5:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
+                                                                         "hello world">>))
             }
         ]
         ++
@@ -927,9 +983,8 @@ multisig_test_() ->
         ||
             N <- lists:seq(1, 10),
             M <- lists:seq(1, N),
-            %% TODO Maybe heterogeneous combinations of hash and key types?
-            H <- ?MULTI_HASH_TYPES_ALL,
-            K <- [ed25519, ecc_compact],
+            H <- ?MULTI_HASH_TYPES_SUPPORTED,
+            K <- [random | ?PRIMITIVE_KEY_TYPES],
             Network <- [mainnet, testnet]
         ],
     {inparallel, test_generator(fun make_multisig_test_cases/5, Params)}.
