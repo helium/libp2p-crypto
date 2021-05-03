@@ -396,6 +396,15 @@ key_size_bytes(KeyType) ->
 %% @doc Verifies a binary against a given digital signature.
 -spec verify(binary(), binary(), pubkey()) -> boolean().
 verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
+    HashTypes = ?MULTI_HASH_TYPES_SUPPORTED ++ ?MULTI_HASH_TYPES_DEPRECATED,
+    verify_multisig(Bin, MultiSignature, {multisig, M, N, KeysDigest}, HashTypes);
+verify(Bin, Signature, {ecc_compact, PubKey}) ->
+    public_key:verify(Bin, sha256, Signature, PubKey);
+verify(Bin, Signature, {ed25519, PubKey}) ->
+    enacl:sign_verify_detached(Signature, Bin, PubKey).
+
+-spec verify_multisig(binary(), binary(), pubkey_multi(), [atom()]) -> boolean().
+verify_multisig(Bin, MultiSignature, {multisig, M, N, KeysDigest}, HashTypes) ->
     try
         {Keys, KeysLen} = multisig_parse_keys(MultiSignature, N),
         N = length(Keys),
@@ -404,7 +413,7 @@ verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
             {error, _} ->
                 false;
             {ok, HashType} ->
-                case lists:member(HashType, ?MULTI_HASH_TYPES_SUPPORTED ++ ?MULTI_HASH_TYPES_DEPRECATED) of
+                case lists:member(HashType, HashTypes) of
                     true ->
                         case multihash:digest(KeysBin, HashType) of
                             {ok, <<KeysDigest/binary>>} ->
@@ -427,11 +436,7 @@ verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
         end
     catch _:_ ->
               false
-    end;
-verify(Bin, Signature, {ecc_compact, PubKey}) ->
-    public_key:verify(Bin, sha256, Signature, PubKey);
-verify(Bin, Signature, {ed25519, PubKey}) ->
-    enacl:sign_verify_detached(Signature, Bin, PubKey).
+    end.
 
 -spec multisig_parse_keys(binary(), non_neg_integer()) ->
     {[pubkey()], non_neg_integer()}.
@@ -698,12 +703,12 @@ isig_to_bin({I, <<Sig/binary>>}) ->
 %% For test-set representation details see:
 %% http://erlang.org/doc/apps/eunit/chapter.html#eunit-test-representation
 %% @end
-make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
+make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
     Title =
         fun (Name) ->
             lists:flatten(io_lib:format(
-                "Multisig test: ~s. Params: [Network: ~p, M:~b, N:~b, HashType:~s, KeyType:~s].",
-                [Name, Network, M, N, HashType, KeyType]
+                "Multisig test: ~s. Params: [Network: ~p, M:~b, N:~b, KeyType:~s, HashType:~s, HashTypes: ~p].",
+                [Name, Network, M, N, KeyType, HashType, HashTypes]
              ))
         end,
     MsgGood = <<"I'm in dire need of HNT and communications to reach others seem abortive.">>,
@@ -761,7 +766,7 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
             %% sig
             {
                 Title("Everything validly constructed"),
-                ?_assert(verify(MsgGood, MultiSigGood, MultiPubKeyGood))
+                ?_assert(verify_multisig(MsgGood, MultiSigGood, MultiPubKeyGood, HashTypes))
             }
         ],
     Negative =
@@ -842,87 +847,94 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
                         fun ({I, S}) when I =:= R -> {N + 1, S}; (IS) -> IS end,
                     ISigsOutOfRange = lists:map(Replace, ISigs),
                     SigBad = iolist_to_binary([BinKeys, ISigsToBin(ISigsOutOfRange)]),
-                    ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyGood))
+                    ?_assertNot(verify_multisig(MsgGood, SigBad, MultiPubKeyGood, HashTypes))
                 end)()
             },
             {
                 Title("Duplicate sig from same index"),
                 (fun () ->
                     SigBad = iolist_to_binary([BinKeys, ISigsToBin([hd(ISigs)|ISigs])]),
-                    ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyGood))
+                    ?_assertNot(verify_multisig(MsgGood, SigBad, MultiPubKeyGood, HashTypes))
                 end)()
             },
             {
                 Title("Unsupported hash type"),
                 (fun () ->
-                    {ok, MultiPubKeyBad} = make_multisig_pubkey_(Network, M, N, Keys0, sha1),
+                    {ok, MultiPubKeyBad} = make_multisig_pubkey_(Network, M, N, Keys0, HashType),
                     {ok, SigBad} = make_multisig_signature(Network, MsgGood, MultiPubKeyBad, Keys0, ISigs),
-                    SigBad = iolist_to_binary([BinKeys, ISigsToBin(ISigs)]),
-                    ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyBad))
+                    ?_assertNot(verify_multisig(MsgGood, SigBad, MultiPubKeyBad, HashTypes -- [HashType]))
                 end)()
             },
             {
                 Title("Wrong message string"),
-                ?_assertNot(verify(
+                ?_assertNot(verify_multisig(
                     <<MsgGood/binary, "totally not a scam">>,
                     MultiSigGood,
-                    MultiPubKeyGood
+                    MultiPubKeyGood,
+                    HashTypes
                 ))
             },
             {
                 Title("Multisig with appended junk"),
-                ?_assertNot(verify(
+                ?_assertNot(verify_multisig(
                     MsgGood,
                     <<MultiSigGood/binary, "looks legit">>,
-                    MultiPubKeyGood
+                    MultiPubKeyGood,
+                    HashTypes
                 ))
             },
             {
                 Title("Multisig with unsupported hash"),
-                ?_assertNot(verify(
+                ?_assertNot(verify_multisig(
                     MsgGood,
                     multihash:digest(iolist_to_binary(BinKeys), sha1),
-                    MultiPubKeyGood
+                    MultiPubKeyGood,
+                    HashTypes
                 ))
             },
             {
                 Title("Pubkey with junk appended to keys digest"),
-                ?_assertNot(verify(
+                ?_assertNot(verify_multisig(
                     MsgGood,
                     MultiSigGood,
-                    {multisig, M, N, <<KeysDigest/binary, "hi">>}
+                    {multisig, M, N, <<KeysDigest/binary, "hi">>},
+                    HashTypes
                 ))
             },
             {
                 Title("Pubkey M > N"),
-                ?_assertNot(verify(
+                ?_assertNot(verify_multisig(
                     MsgGood,
                     MultiSigGood,
-                    {multisig, N + 1, N, KeysDigest}
+                    {multisig, N + 1, N, KeysDigest},
+                    HashTypes
                 ))
             },
             {
                 Title("Pubkey N < M"),
-                ?_assertNot(verify(
+                ?_assertNot(verify_multisig(
                     MsgGood,
                     MultiSigGood,
-                    {multisig, M, M - 1, KeysDigest}
+                    {multisig, M, M - 1, KeysDigest},
+                    HashTypes
                 ))
             },
             {
                 Title("Pubkey M + 1"),
-                ?_assertNot(verify(
+                ?_assertNot(verify_multisig(
                     MsgGood,
                     MultiSigGood,
-                    {multisig, M + 1, N, KeysDigest}
+                    {multisig, M + 1, N, KeysDigest},
+                    HashTypes
                 ))
             },
             {
                 Title("Pubkey N + 1"),
-                ?_assertNot(verify(
+                ?_assertNot(verify_multisig(
                     MsgGood,
                     MultiSigGood,
-                    {multisig, M, N + 1, KeysDigest}
+                    {multisig, M, N + 1, KeysDigest},
+                    HashTypes
                 ))
             },
             {
@@ -952,10 +964,11 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
             [K1, K2 | Ks] ->
                 [{
                     Title("Re-ordered keys"),
-                    ?_assertNot(verify(
+                    ?_assertNot(verify_multisig(
                         MsgGood,
                         iolist_to_binary([[K2, K1 | Ks], ISigsToBin(ISigs)]),
-                        MultiPubKeyGood
+                        MultiPubKeyGood,
+                        HashTypes
                     ))
                 }];
             [_] ->
@@ -971,23 +984,24 @@ make_multisig_test_cases(Network, M, N, HashType, KeyType) ->
                     [iolist_to_binary([BinKeys, ISigsToBin(lists:duplicate(M, IS))])],
                 [{
                     Title("Reuse same signature M times"),
-                    ?_assertNot(verify(MsgGood, SigBad, MultiPubKeyGood))
+                    ?_assertNot(verify_multisig(MsgGood, SigBad, MultiPubKeyGood, HashTypes))
                 }]
         end,
     Positive ++ Negative.
 
 multisig_test_() ->
+    HashTypes = ?MULTI_HASH_TYPES_ALL,
     Params =
         [
-            [Network, M, N, H, K]
+            [Network, M, N, K, H, HashTypes]
         ||
             N <- lists:seq(1, 10),
             M <- lists:seq(1, N),
-            H <- ?MULTI_HASH_TYPES_SUPPORTED,
+            H <- HashTypes,
             K <- [random | ?PRIMITIVE_KEY_TYPES],
             Network <- [mainnet, testnet]
         ],
-    {inparallel, test_generator(fun make_multisig_test_cases/5, Params)}.
+    {inparallel, test_generator(fun make_multisig_test_cases/6, Params)}.
 
 save_load_test() ->
     SaveLoad = fun(Network, KeyType) ->
