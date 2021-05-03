@@ -15,11 +15,12 @@ prop_multipubkey_test() ->
                 #{secret := SK, public := PK} = libp2p_crypto:generate_keys(KeyType),
                 {PK, (libp2p_crypto:mk_sig_fun(SK))(Msg)}
             end,
-            IKeySigs = [{I, KeySig()} || I <- lists:seq(0, N - 1)],
+            IKeySigs = [KeySig() || _ <- lists:seq(0, N - 1)],
 
-            ISigs = lists:sublist([{I, S} || {I, {_, S}} <- IKeySigs], M),
+            Keys0 = [K || {K, _} <- IKeySigs],
 
-            Keys0 = [K || {_, {K, _}} <- IKeySigs],
+            ISigs = lists:sublist([{libp2p_crypto:multisig_member_key_index(K, Keys0), S} || {K, S} <- IKeySigs], M),
+
 
             {ok, MultiPubKey} = libp2p_crypto:make_multisig_pubkey(?NETWORK, M, N, Keys0, HashType),
             {ok, MultiSig} = libp2p_crypto:make_multisig_signature(?NETWORK, Msg, MultiPubKey, Keys0, ISigs),

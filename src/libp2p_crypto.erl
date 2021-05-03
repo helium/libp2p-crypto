@@ -111,6 +111,10 @@
     verify/3,
     keys_to_bin/1,
     keys_from_bin/1,
+    multisig_member_keys_sort/1,
+    multisig_member_keys_sort/2,
+    multisig_member_key_index/2,
+    multisig_member_key_index/3,
     make_multisig_pubkey/4,
     make_multisig_pubkey/5,
     make_multisig_signature/5,
@@ -405,8 +409,12 @@ verify(Bin, Signature, {ed25519, PubKey}) ->
 
 -spec verify_multisig(binary(), binary(), pubkey_multi(), [atom()]) -> boolean().
 verify_multisig(Bin, MultiSignature, {multisig, M, N, KeysDigest}, HashTypes) ->
+    verify_multisig(get_network(mainnet), Bin, MultiSignature, {multisig, M, N, KeysDigest}, HashTypes).
+
+-spec verify_multisig(network(), binary(), binary(), pubkey_multi(), [atom()]) -> boolean().
+verify_multisig(Network, Bin, MultiSignature, {multisig, M, N, KeysDigest}, HashTypes) ->
     try
-        {Keys, KeysLen} = multisig_parse_keys(MultiSignature, N),
+        {Keys, KeysLen} = multisig_parse_keys(Network, MultiSignature, N),
         N = length(Keys),
         <<KeysBin:KeysLen/binary, ISigsBin/binary>> = MultiSignature,
         case multihash:hash(KeysDigest) of
@@ -438,20 +446,22 @@ verify_multisig(Bin, MultiSignature, {multisig, M, N, KeysDigest}, HashTypes) ->
               false
     end.
 
--spec multisig_parse_keys(binary(), non_neg_integer()) ->
+-spec multisig_parse_keys(network(), binary(), non_neg_integer()) ->
     {[pubkey()], non_neg_integer()}.
-multisig_parse_keys(<<MultiSignature/binary>>, N) ->
-    multisig_parse_keys(MultiSignature, N, 0, []).
+multisig_parse_keys(Network, <<MultiSignature/binary>>, N) ->
+    multisig_parse_keys(Network, MultiSignature, N, 0, []).
 
-multisig_parse_keys(<<_/binary>>, 0, ConsumedBytes, Keys) ->
-    {multisig_member_keys_sort(Keys), ConsumedBytes};
-multisig_parse_keys(<<NetType:4, KeyType:4, Rest0/binary>>, N, ConsumedBytes0, Keys) ->
+-spec multisig_parse_keys(network(), binary(), non_neg_integer(), non_neg_integer(), [pubkey()]) ->
+    {[pubkey()], non_neg_integer()}.
+multisig_parse_keys(Network, <<_/binary>>, 0, ConsumedBytes, Keys) ->
+    {multisig_member_keys_sort(Network, Keys), ConsumedBytes};
+multisig_parse_keys(Network, <<NetType:4, KeyType:4, Rest0/binary>>, N, ConsumedBytes0, Keys) ->
     Size = key_size_bytes(KeyType),
     <<KeyBin:Size/bytes, Rest1/binary>> = Rest0,
     Key = bin_to_pubkey(to_network(NetType), <<NetType:4, KeyType:4, KeyBin:Size/binary>>),
     ConsumedBytes1 = ConsumedBytes0 + 1 + Size, % 1 for (NetType + KeyType)
-    multisig_parse_keys(Rest1, N - 1, ConsumedBytes1, [Key | Keys]);
-multisig_parse_keys(<<_/binary>>, _, _, _) ->
+    multisig_parse_keys(Network, Rest1, N - 1, ConsumedBytes1, [Key | Keys]);
+multisig_parse_keys(_, <<_/binary>>, _, _, _) ->
     erlang:error(multisig_keys_misaligned).
 
 -spec multisig_parse_isigs(binary(), pos_integer(), pos_integer()) ->
@@ -608,13 +618,32 @@ make_multisig_pubkey_(Network, M, N, PubKeys, HashType) ->
     end.
 
 -spec multisig_member_keys_to_bin(network(), [pubkey_single()]) -> binary().
-multisig_member_keys_to_bin(Network, PKs) ->
-    Bins = [pubkey_to_bin(Network, K) || K <- multisig_member_keys_sort(PKs)],
+multisig_member_keys_to_bin(Net, PKs) ->
+    Bins = [pubkey_to_bin(Net, K) || K <- multisig_member_keys_sort(Net, PKs)],
     iolist_to_binary(Bins).
 
+-spec multisig_member_key_index(pubkey_single(), [pubkey_single()]) ->
+    non_neg_integer().
+multisig_member_key_index(Key, Keys) ->
+    multisig_member_key_index(get_network(mainnet), Key, Keys).
+
+-spec multisig_member_key_index(network(), pubkey_single(), [pubkey_single()]) ->
+    non_neg_integer().
+multisig_member_key_index(Network, Key, Keys0) ->
+    N = length(Keys0),
+    Keys1 = multisig_member_keys_sort(Network, Keys0),
+    case [I || {I, K} <- lists:zip(lists:seq(0, N - 1), Keys1), K == Key] of
+        [I] -> I;
+        []  -> erlang:error(key_not_in_given_list)
+    end.
+
 -spec multisig_member_keys_sort([pubkey_single()]) -> [pubkey_single()].
-multisig_member_keys_sort(Keys0) ->
-    Keys1 = [{K, multisig_member_key_sort_form(K)} || K <- Keys0],
+multisig_member_keys_sort(Keys) ->
+    multisig_member_keys_sort(get_network(mainnet), Keys).
+
+-spec multisig_member_keys_sort(network(), [pubkey_single()]) -> [pubkey_single()].
+multisig_member_keys_sort(Network, Keys0) ->
+    Keys1 = [{K, multisig_member_key_sort_form(Network, K)} || K <- Keys0],
     Cmp = fun ({_, A}, {_, B}) -> multisig_member_keys_cmp(A, B) end,
     [K || {K, _} <- lists:sort(Cmp, Keys1)].
 
@@ -622,11 +651,11 @@ multisig_member_keys_sort(Keys0) ->
 multisig_member_keys_cmp(A, B) ->
     A < B.
 
--spec multisig_member_key_sort_form(pubkey_single()) -> binary().
-multisig_member_key_sort_form({multisig, _, _, _}) ->
+-spec multisig_member_key_sort_form(network(), pubkey_single()) -> binary().
+multisig_member_key_sort_form(_, {multisig, _, _, _}) ->
     erlang:error({badarg, expected_single_but_given_multisig_pubkey});
-multisig_member_key_sort_form(PK) ->
-    list_to_binary(pubkey_to_b58(PK)).
+multisig_member_key_sort_form(Network, PK) ->
+    list_to_binary(pubkey_to_b58(Network, PK)).
 
 %% @doc A multisig-signature is a concatanation of a list of N
 %% individual-pubkeys and a list of M-N triples of individual-signatures
@@ -667,8 +696,9 @@ make_multisig_signature(_, _, {multisig, _, N, _}, K, _) when N > length(K) ->
     {error, insufficient_keys};
 make_multisig_signature(_, _, {multisig, _, N, _}, K, _) when N < length(K) ->
     {error, too_many_keys};
-make_multisig_signature(Network, Msg, {multisig, _, _, KeysDigest}, Keys, ISigs) ->
+make_multisig_signature(Network, Msg, {multisig, _, _, KeysDigest}, Keys0, ISigs) ->
     {ok, HashType} = multihash:hash(KeysDigest),
+    Keys = multisig_member_keys_sort(Network, Keys0),
     KeysBin = multisig_member_keys_to_bin(Network, Keys),
     case multihash:digest(KeysBin, HashType) of
         {ok, <<KeysDigest/binary>>} ->
@@ -703,35 +733,33 @@ isig_to_bin({I, <<Sig/binary>>}) ->
 %% For test-set representation details see:
 %% http://erlang.org/doc/apps/eunit/chapter.html#eunit-test-representation
 %% @end
-make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
+make_multisig_test_cases(Network, M, N, KeyType0, HashType, HashTypes) ->
     Title =
         fun (Name) ->
             lists:flatten(io_lib:format(
-                "Multisig test: ~s. Params: [Network: ~p, M:~b, N:~b, KeyType:~s, HashType:~s, HashTypes: ~p].",
-                [Name, Network, M, N, KeyType, HashType, HashTypes]
+                "Multisig test: ~s. Params: [Network: ~p, M:~b, N:~b, KeyType:~p, HashType:~s, HashTypes: ~p].",
+                [Name, Network, M, N, KeyType0, HashType, HashTypes]
              ))
         end,
     MsgGood = <<"I'm in dire need of HNT and communications to reach others seem abortive.">>,
     ISigsToBin = fun (ISigs) -> lists:map(fun isig_to_bin/1, ISigs) end,
     KeySig =
         fun () ->
-                #{secret := SK, public := PK} = case KeyType of
-                    random ->
-                        generate_keys(hd(list_shuffle(?PRIMITIVE_KEY_TYPES)));
-                    _ -> generate_keys(KeyType)
-                end,
-            {PK, multisig_member_key_sort_form(PK), (mk_sig_fun(SK))(MsgGood)}
+                #{secret := S, public := P} =
+                    case KeyType0 of
+                        random ->
+                            generate_keys(list_random_element(?PRIMITIVE_KEY_TYPES));
+                        {specific, KeyType} ->
+                            generate_keys(KeyType)
+                    end,
+            {P, (mk_sig_fun(S))(MsgGood)}
         end,
-    KeySigs =
-        lists:sort(
-            fun ({_, A, _}, {_, B, _}) -> multisig_member_keys_cmp(A, B) end,
-            [KeySig() || _ <- lists:duplicate(N, {})]
-        ),
-    IKeySigs = mapi(fun({I, {K, _, S}}) -> {I, {K, S}} end, KeySigs, 0),
-    Keys0 = [K || {_, {K, _}} <- IKeySigs],
+    KeySigs = [KeySig() || _ <- lists:duplicate(N, {})],
+    Keys0 = [K || {K, _} <- KeySigs],
+    ISigs0 = [{multisig_member_key_index(Network, K, Keys0), S} || {K, S} <- KeySigs],
+    ISigs = list_shuffle(lists:sublist(ISigs0, M)),
     PK2Bin = fun(PK) -> pubkey_to_bin(Network, PK) end,
     BinKeys = lists:map(PK2Bin, Keys0),
-    ISigs = list_shuffle(lists:sublist([{I, S} || {I, {_, S}} <- IKeySigs], M)),
     {ok, KeysDigest} = multihash:digest(iolist_to_binary(BinKeys), HashType),
     {ok, MultiPubKeyGood} = make_multisig_pubkey_(Network, M, N, Keys0, HashType),
     {ok, MultiSigGood} = make_multisig_signature(Network, MsgGood, MultiPubKeyGood, Keys0, ISigs),
@@ -766,7 +794,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             %% sig
             {
                 Title("Everything validly constructed"),
-                ?_assert(verify_multisig(MsgGood, MultiSigGood, MultiPubKeyGood, HashTypes))
+                ?_assert(verify_multisig(Network, MsgGood, MultiSigGood, MultiPubKeyGood, HashTypes))
             }
         ],
     Negative =
@@ -825,10 +853,10 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
                         MsgGood,
                         {multisig, M, N,
                             (fun() ->
-                                {_, BinKey, _} = KeySig(),
+                                {PK, _} = KeySig(),
                                 {ok, BadKeysDigest} =
                                     multihash:digest(
-                                        iolist_to_binary([BinKey | tl(BinKeys)]),
+                                        iolist_to_binary([pubkey_to_bin(Network, PK) | tl(BinKeys)]),
                                         HashType
                                     ),
                                 BadKeysDigest
@@ -847,14 +875,14 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
                         fun ({I, S}) when I =:= R -> {N + 1, S}; (IS) -> IS end,
                     ISigsOutOfRange = lists:map(Replace, ISigs),
                     SigBad = iolist_to_binary([BinKeys, ISigsToBin(ISigsOutOfRange)]),
-                    ?_assertNot(verify_multisig(MsgGood, SigBad, MultiPubKeyGood, HashTypes))
+                    ?_assertNot(verify_multisig(Network, MsgGood, SigBad, MultiPubKeyGood, HashTypes))
                 end)()
             },
             {
                 Title("Duplicate sig from same index"),
                 (fun () ->
                     SigBad = iolist_to_binary([BinKeys, ISigsToBin([hd(ISigs)|ISigs])]),
-                    ?_assertNot(verify_multisig(MsgGood, SigBad, MultiPubKeyGood, HashTypes))
+                    ?_assertNot(verify_multisig(Network, MsgGood, SigBad, MultiPubKeyGood, HashTypes))
                 end)()
             },
             {
@@ -862,12 +890,13 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
                 (fun () ->
                     {ok, MultiPubKeyBad} = make_multisig_pubkey_(Network, M, N, Keys0, HashType),
                     {ok, SigBad} = make_multisig_signature(Network, MsgGood, MultiPubKeyBad, Keys0, ISigs),
-                    ?_assertNot(verify_multisig(MsgGood, SigBad, MultiPubKeyBad, HashTypes -- [HashType]))
+                    ?_assertNot(verify_multisig(Network, MsgGood, SigBad, MultiPubKeyBad, HashTypes -- [HashType]))
                 end)()
             },
             {
                 Title("Wrong message string"),
                 ?_assertNot(verify_multisig(
+                    Network,
                     <<MsgGood/binary, "totally not a scam">>,
                     MultiSigGood,
                     MultiPubKeyGood,
@@ -877,6 +906,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             {
                 Title("Multisig with appended junk"),
                 ?_assertNot(verify_multisig(
+                    Network,
                     MsgGood,
                     <<MultiSigGood/binary, "looks legit">>,
                     MultiPubKeyGood,
@@ -886,6 +916,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             {
                 Title("Multisig with unsupported hash"),
                 ?_assertNot(verify_multisig(
+                    Network,
                     MsgGood,
                     multihash:digest(iolist_to_binary(BinKeys), sha1),
                     MultiPubKeyGood,
@@ -895,6 +926,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             {
                 Title("Pubkey with junk appended to keys digest"),
                 ?_assertNot(verify_multisig(
+                    Network,
                     MsgGood,
                     MultiSigGood,
                     {multisig, M, N, <<KeysDigest/binary, "hi">>},
@@ -904,6 +936,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             {
                 Title("Pubkey M > N"),
                 ?_assertNot(verify_multisig(
+                    Network,
                     MsgGood,
                     MultiSigGood,
                     {multisig, N + 1, N, KeysDigest},
@@ -913,6 +946,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             {
                 Title("Pubkey N < M"),
                 ?_assertNot(verify_multisig(
+                    Network,
                     MsgGood,
                     MultiSigGood,
                     {multisig, M, M - 1, KeysDigest},
@@ -922,6 +956,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             {
                 Title("Pubkey M + 1"),
                 ?_assertNot(verify_multisig(
+                    Network,
                     MsgGood,
                     MultiSigGood,
                     {multisig, M + 1, N, KeysDigest},
@@ -931,6 +966,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             {
                 Title("Pubkey N + 1"),
                 ?_assertNot(verify_multisig(
+                    Network,
                     MsgGood,
                     MultiSigGood,
                     {multisig, M, N + 1, KeysDigest},
@@ -990,11 +1026,18 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
             }
         ]
         ++
-        case BinKeys of
+        %% XXX Non-determinism mitigations:
+        %% - We PRE-SORT because we can't otherwise be sure if the generated
+        %%   keys did not _accidentally_ end up in the correct order;
+        %% - We re-order MANUALLY because list_shuffle is not deterministic,
+        %%   especially for small lists.
+        %% XXX Fragile, since it doesn't use the canonical multisig_member_key_sort_form.
+        case lists:sort(fun multisig_member_keys_cmp/2, lists:map(fun bin_to_b58/1, BinKeys)) of
             [K1, K2 | Ks] ->
                 [{
                     Title("Re-ordered keys"),
                     ?_assertNot(verify_multisig(
+                        Network,
                         MsgGood,
                         iolist_to_binary([[K2, K1 | Ks], ISigsToBin(ISigs)]),
                         MultiPubKeyGood,
@@ -1014,7 +1057,7 @@ make_multisig_test_cases(Network, M, N, KeyType, HashType, HashTypes) ->
                     [iolist_to_binary([BinKeys, ISigsToBin(lists:duplicate(M, IS))])],
                 [{
                     Title("Reuse same signature M times"),
-                    ?_assertNot(verify_multisig(MsgGood, SigBad, MultiPubKeyGood, HashTypes))
+                    ?_assertNot(verify_multisig(Network, MsgGood, SigBad, MultiPubKeyGood, HashTypes))
                 }]
         end,
     Positive ++ Negative.
@@ -1028,7 +1071,7 @@ multisig_test_() ->
             N <- lists:seq(1, 5),
             M <- lists:seq(1, N),
             H <- HashTypes,
-            K <- [random | ?PRIMITIVE_KEY_TYPES],
+            K <- [random | [{specific, KT} || KT <- ?PRIMITIVE_KEY_TYPES]],
             Network <- [mainnet, testnet]
         ],
     {inparallel, test_generator(fun make_multisig_test_cases/6, Params)}.
@@ -1252,14 +1295,10 @@ array_shuffle(A0) ->
 list_shuffle(L) ->
     array:to_list(array_shuffle(array:from_list(L))).
 
--spec mapi(fun(({integer(), X}) -> Y), [X]) -> [Y].
-mapi(F, Xs) ->
-    mapi(F, Xs, 1).
-
--spec mapi(fun(({integer(), X}) -> Y), [X], integer()) -> [Y].
-mapi(_, [], _) ->
-    [];
-mapi(F, [X | Xs], I) ->
-    [F({I, X}) | mapi(F, Xs, I + 1)].
+-spec list_random_element([A]) -> A.
+list_random_element([]) ->
+    erlang:error(empty_list);
+list_random_element([_|_]=Xs) ->
+    lists:nth(rand:uniform(length(Xs)), Xs).
 
 -endif.
