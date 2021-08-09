@@ -11,8 +11,8 @@
 %% the type of keythat follows in the binary (KEYTYPE).
 -define(KEYTYPE_ECC_COMPACT, 0).
 -define(KEYTYPE_ED25519, 1).
--define(KEYTYPE_BLS12_381, 2).
 -define(KEYTYPE_MULTISIG, 2).
+-define(KEYTYPE_BLS12_381, 3).
 -define(NETTYPE_MAIN, 0).
 -define(NETTYPE_TEST, 1).
 
