@@ -1171,7 +1171,7 @@ verify_ecdh_test() ->
 
     ok.
 
-verify_ecdh_cross_curve_failure() ->
+verify_ecdh_cross_curve_failure_test() ->
     #{secret := PrivKeyCompact, public := PubKeyCompact} = generate_keys(ecc_compact),
     #{secret := PrivKeyED, public := PubKeyED} = generate_keys(ed25519),
     ECDHCompact = mk_ecdh_fun(PrivKeyCompact),
