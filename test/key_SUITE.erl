@@ -2,11 +2,36 @@
 
 -include_lib("common_test/include/ct.hrl").
 
--export([all/0, init_per_testcase/2, end_per_testcase/2]).
+-export([all/0,
+         init_per_testcase/2,
+         end_per_testcase/2,
+         init_per_group/2,
+         end_per_group/2,
+         groups/0]).
 
--export([sig_test/1]).
+-export([sig_test/1, roundtrip_test/1]).
 
-all() -> [sig_test].
+test_cases() -> [sig_test, roundtrip_test].
+
+all() ->
+    [{group, ecc_compact}, {group, ed25519}, {group, bls12_381}].
+
+groups() ->
+    [
+        {ecc_compact, [], test_cases()},
+        {ed25519, [], test_cases()},
+        {bls12_381, [], test_cases()}
+    ].
+
+init_per_group(ecc_compact, Config) ->
+    [{key_type, ecc_compact} | Config];
+init_per_group(ed25519, Config) ->
+    [{key_type, ed25519} | Config];
+init_per_group(bls12_381, Config) ->
+    [{key_type, bls12_381} | Config].
+
+end_per_group(_, _Config) ->
+    ok.
 
 init_per_testcase(_, Config) ->
     Msg = <<"Rip and tear until it's done">>,
@@ -15,17 +40,34 @@ init_per_testcase(_, Config) ->
 end_per_testcase(_, Config) ->
     Config.
 
-sig_test(Config) ->
-    Tot = ?config(total, Config),
-    true = run(Config, gen_keys(ed25519, Tot)),
-    true = run(Config, gen_keys(ecc_compact, Tot)),
-    true = run(Config, gen_keys(bls12_381, Tot)),
+%% Test Cases
+
+roundtrip_test(Config) ->
+    true = run_roundtrip_test(gen_keys(Config)),
+    true = run_roundtrip_test(gen_keys(Config)),
+    true = run_roundtrip_test(gen_keys(Config)),
     ok.
 
-gen_keys(KeyType, Tot) ->
+sig_test(Config) ->
+    true = run_sig_test(Config, gen_keys(Config)),
+    true = run_sig_test(Config, gen_keys(Config)),
+    true = run_sig_test(Config, gen_keys(Config)),
+    ok.
+
+%% Helpers
+
+run_roundtrip_test(Keys) ->
+    Bins = lists:map(fun libp2p_crypto:keys_to_bin/1, Keys),
+    B58s = lists:map(fun libp2p_crypto:bin_to_b58/1, Bins),
+    Bins1 = lists:map(fun libp2p_crypto:b58_to_bin/1, B58s),
+    Bins == Bins1.
+
+gen_keys(Config) ->
+    Tot = ?config(total, Config),
+    KeyType = ?config(key_type, Config),
     [libp2p_crypto:generate_keys(KeyType) || _ <- lists:seq(1, Tot)].
 
-run(Config, Keys) ->
+run_sig_test(Config, Keys) ->
     Msg = ?config(msg, Config),
     SigsAndPKs = lists:map(
                    fun(#{public := PK, secret := SK}) ->

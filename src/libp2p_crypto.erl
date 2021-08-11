@@ -598,6 +598,8 @@ pubkey_is_multisig({multisig, _, _, _}) ->
 pubkey_is_multisig({ecc_compact, _}) ->
     false;
 pubkey_is_multisig({ed25519, _}) ->
+    false;
+pubkey_is_multisig({bls12_381, _}) ->
     false.
 
 %% @doc The binary form of this multisig-pubkey can be optained with

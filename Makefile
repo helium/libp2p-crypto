@@ -25,7 +25,7 @@ cover:
 	$(REBAR) cover
 
 test:
-	$(REBAR) as test do eunit, cover
+	$(REBAR) as test do eunit, ct, cover
 
 ci:
 	$(REBAR) as test do eunit,cover && $(REBAR) do xref, dialyzer
