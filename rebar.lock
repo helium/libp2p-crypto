@@ -1,10 +1,13 @@
-{"1.1.0",
+{"1.2.0",
 [{<<"base32">>,{pkg,<<"base32">>,<<"0.1.0">>},1},
  {<<"ecc_compact">>,{pkg,<<"ecc_compact">>,<<"1.0.5">>},0},
  {<<"enacl">>,{pkg,<<"enacl">>,<<"1.1.1">>},0},
  {<<"erl_base58">>,{pkg,<<"erl_base58">>,<<"0.0.1">>},0},
  {<<"multiaddr">>,{pkg,<<"multiaddr">>,<<"1.1.3">>},0},
- {<<"multihash">>,{pkg,<<"multihash">>,<<"2.0.3">>},0},
+ {<<"multihash">>,
+  {git,"https://github.com/helium/erlang-multihash.git",
+       {ref,"5742761f89669f2b17adfc72f0cc6a85458ec43b"}},
+  0},
  {<<"small_ints">>,{pkg,<<"small_ints">>,<<"0.1.0">>},1}]}.
 [
 {pkg_hash,[
@@ -13,6 +16,12 @@
  {<<"enacl">>, <<"F65DC64D9BFF2D8A534CB77AEF14DA5E7A2FA148987D87856F79A4745C9C2627">>},
  {<<"erl_base58">>, <<"37710854461D71DF338E73C65776302DB41C4BAB4674D2EC134ED7BCFC7B5552">>},
  {<<"multiaddr">>, <<"978E58E28F6FACAF428C87AF933612B1E2F3F2775F1794EDA5E831A4EACD2984">>},
- {<<"multihash">>, <<"FC4ADD0368FF9955BEF8526B8B232745297E8FE3808277165EF29128116FD871">>},
- {<<"small_ints">>, <<"82A824C8794A2DDC73CB5CD00EAD11331DB296521AD16A619C13D668572B868A">>}]}
+ {<<"small_ints">>, <<"82A824C8794A2DDC73CB5CD00EAD11331DB296521AD16A619C13D668572B868A">>}]},
+{pkg_hash_ext,[
+ {<<"base32">>, <<"10A73951D857D8CB1ECEEA8EB96C6941F6A76E105947AD09C2B73977DEE07638">>},
+ {<<"ecc_compact">>, <<"3DB649D21AE7FEDF460B4D650B99813B761DD905EED6286420C2B2C7E169A356">>},
+ {<<"enacl">>, <<"60D329AC3976008F774E21ABA254671104976D61A792287615BB26816F09EA0F">>},
+ {<<"erl_base58">>, <<"41E8EC356C5C5558A45682F61F80725789AE9A11BD1CC7D5C73CDE1E3B546DD2">>},
+ {<<"multiaddr">>, <<"980D3EA5EB0EB2EFC51E3D10953F17447D417C49BD2FCD7FC6A2A42D1F66D5EE">>},
+ {<<"small_ints">>, <<"00B3BFF6C446711F8EA4EA942056F375E0F13C7983CC3950C6EA1DE014C7C416">>}]}
 ].
