@@ -4,7 +4,7 @@
  {<<"enacl">>,{pkg,<<"enacl">>,<<"1.1.1">>},0},
  {<<"erl_base58">>,{pkg,<<"erl_base58">>,<<"0.0.1">>},0},
  {<<"multiaddr">>,{pkg,<<"multiaddr">>,<<"1.1.3">>},0},
- {<<"multihash">>,{pkg,<<"multihash">>,<<"2.0.3">>},0},
+ {<<"multihash">>,{pkg,<<"multihash">>,<<"2.1.0">>},0},
  {<<"small_ints">>,{pkg,<<"small_ints">>,<<"0.1.0">>},1}]}.
 [
 {pkg_hash,[
@@ -13,6 +13,6 @@
  {<<"enacl">>, <<"F65DC64D9BFF2D8A534CB77AEF14DA5E7A2FA148987D87856F79A4745C9C2627">>},
  {<<"erl_base58">>, <<"37710854461D71DF338E73C65776302DB41C4BAB4674D2EC134ED7BCFC7B5552">>},
  {<<"multiaddr">>, <<"978E58E28F6FACAF428C87AF933612B1E2F3F2775F1794EDA5E831A4EACD2984">>},
- {<<"multihash">>, <<"FC4ADD0368FF9955BEF8526B8B232745297E8FE3808277165EF29128116FD871">>},
+ {<<"multihash">>, <<"F084F7C6BEC062F0C0E82AE18CFDC8DAEC8F4FAA4C8E1ACE0B9C676A9323162F">>},
  {<<"small_ints">>, <<"82A824C8794A2DDC73CB5CD00EAD11331DB296521AD16A619C13D668572B868A">>}]}
 ].
