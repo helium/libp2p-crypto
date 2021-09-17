@@ -189,16 +189,26 @@ mk_sig_fun({ed25519, PrivKey}) ->
 %% before use
 -spec mk_ecdh_fun(privkey()) -> ecdh_fun().
 mk_ecdh_fun({ecc_compact, PrivKey}) ->
-    fun({ecc_compact, {PubKey, {namedCurve, ?secp256r1}}}) ->
-        public_key:compute_key(PubKey, PrivKey)
+    fun(OtherPubKey) ->
+        case OtherPubKey of
+            {ecc_compact, {PubKey, {namedCurve, ?secp256r1}}} ->
+                public_key:compute_key(PubKey, PrivKey);
+            _ ->
+                erlang:error({incompatible_key, OtherPubKey})
+        end
     end;
 mk_ecdh_fun({ed25519, PrivKey}) ->
-    %% Do an X25519 ECDH exchange after converting the ED25519 keys to Curve25519 keys
-    fun({ed25519, PubKey}) ->
-        enacl:box_beforenm(
-            enacl:crypto_sign_ed25519_public_to_curve25519(PubKey),
-            enacl:crypto_sign_ed25519_secret_to_curve25519(PrivKey)
-        )
+    fun(OtherPubKey) ->
+        case OtherPubKey of
+            {ed25519, PubKey} ->
+                %% Do an X25519 ECDH exchange after converting the ED25519 keys to Curve25519 keys
+                enacl:box_beforenm(
+                    enacl:crypto_sign_ed25519_public_to_curve25519(PubKey),
+                    enacl:crypto_sign_ed25519_secret_to_curve25519(PrivKey)
+                );
+            _ ->
+                erlang:error({incompatible_key, OtherPubKey})
+        end
     end.
 
 %% @doc Store the given keys in a given filename. The keypair is
@@ -1159,6 +1169,16 @@ verify_ecdh_test() ->
     Verify(ecc_compact),
     Verify(ed25519),
 
+    ok.
+
+verify_ecdh_cross_curve_failure_test() ->
+    #{secret := PrivKeyCompact, public := PubKeyCompact} = generate_keys(ecc_compact),
+    #{secret := PrivKeyED, public := PubKeyED} = generate_keys(ed25519),
+    ECDHCompact = mk_ecdh_fun(PrivKeyCompact),
+    ECDHED = mk_ecdh_fun(PrivKeyED),
+
+    ?assertError({incompatible_key, _}, ECDHCompact(PubKeyED)),
+    ?assertError({incompatible_key, _}, ECDHED(PubKeyCompact)),
     ok.
 
 %% erlfmt-ignore
