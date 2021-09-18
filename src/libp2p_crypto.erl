@@ -12,6 +12,7 @@
 -define(KEYTYPE_ECC_COMPACT, 0).
 -define(KEYTYPE_ED25519, 1).
 -define(KEYTYPE_MULTISIG, 2).
+-define(KEYTYPE_BLS12_381, 3).
 -define(NETTYPE_MAIN, 0).
 -define(NETTYPE_TEST, 1).
 
@@ -20,7 +21,8 @@
 
 -define(PRIMITIVE_KEY_TYPES, [
                               ecc_compact,
-                              ed25519
+                              ed25519,
+                              bls12_381
                              ]).
 
 %% used for testing and known/unknown checking
@@ -52,18 +54,20 @@
 ]).
 -define(MULTI_HASH_TYPES_DEPRECATED, []). %% used ONLY in verify
 
--type key_type() :: ecc_compact | ed25519.
+-type key_type() :: ecc_compact | ed25519 | bls12_381.
 -type network() :: mainnet | testnet.
 -opaque privkey() ::
     {ecc_compact, ecc_compact:private_key()}
-    | {ed25519, enacl_privkey()}.
+    | {ed25519, enacl_privkey()}
+    | {bls12_381, bls12_381_privkey()}.
 
 -opaque pubkey_multi() ::
     {multisig, pos_integer(), pos_integer(), binary()}.
 
 -opaque pubkey_single() ::
     {ecc_compact, ecc_compact:public_key()}
-    | {ed25519, enacl_pubkey()}.
+    | {ed25519, enacl_pubkey()}
+    | {bls12_381, bls12_381_pubkey()}.
 
 -opaque pubkey() ::
     pubkey_single() | pubkey_multi().
@@ -74,6 +78,8 @@
 -type key_map() :: #{secret => privkey(), public => pubkey(), network => network()}.
 -type enacl_privkey() :: <<_:256>>.
 -type enacl_pubkey() :: <<_:256>>.
+-type bls12_381_privkey() :: <<_:256>>.
+-type bls12_381_pubkey() :: <<_:384>>.
 
 -export_type([
     privkey/0,
@@ -161,6 +167,14 @@ generate_keys(Network, ed25519) ->
         secret => {ed25519, PrivKey},
         public => {ed25519, PubKey},
         network => Network
+    };
+generate_keys(Network, bls12_381) ->
+    SK = tc_secret_key:random(),
+    PK = tc_secret_key:public_key(SK),
+    #{
+        secret => {bls12_381, tc_secret_key:serialize(SK)},
+        public => {bls12_381, tc_pubkey:serialize(PK)},
+        network => Network
     }.
 
 %% @doc Load the private key from a pem encoded given filename.
@@ -181,7 +195,9 @@ load_keys(FileName) ->
 mk_sig_fun({ecc_compact, PrivKey}) ->
     fun(Bin) -> public_key:sign(Bin, sha256, PrivKey) end;
 mk_sig_fun({ed25519, PrivKey}) ->
-    fun(Bin) -> enacl:sign_detached(Bin, PrivKey) end.
+    fun(Bin) -> enacl:sign_detached(Bin, PrivKey) end;
+mk_sig_fun({bls12_381, PrivKey}) ->
+    fun(Bin) -> tc_signature:serialize(tc_secret_key:sign(tc_secret_key:deserialize(PrivKey), Bin)) end.
 
 %% @doc Constructs an ECDH exchange function from a given private key.
 %%
@@ -226,7 +242,10 @@ keys_to_bin(Keys = #{secret := {ecc_compact, PrivKey}, public := {ecc_compact, _
     end;
 keys_to_bin(Keys = #{secret := {ed25519, PrivKey}, public := {ed25519, PubKey}}) ->
     NetType = from_network(maps:get(network, Keys, mainnet)),
-    <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/binary>>.
+    <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/binary>>;
+keys_to_bin(Keys = #{secret := {bls12_381, PrivKey}, public := {bls12_381, PubKey}}) ->
+    NetType = from_network(maps:get(network, Keys, mainnet)),
+    <<NetType:4, ?KEYTYPE_BLS12_381:4, PrivKey:32/binary, PubKey:48/binary>>.
 
 %% @doc Convers a given binary to a key map
 -spec keys_from_bin(binary()) -> key_map().
@@ -281,6 +300,12 @@ keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/bina
         secret => {ed25519, PrivKey},
         public => {ed25519, PubKey},
         network => to_network(NetType)
+    };
+keys_from_bin(<<NetType:4, ?KEYTYPE_BLS12_381:4, PrivKey:32/binary, PubKey:48/binary>>) ->
+    #{
+        secret => {bls12_381, PrivKey},
+        public => {bls12_381, PubKey},
+        network => to_network(NetType)
     }.
 
 %% @doc Convertsa a given tagged public key to its binary form on the current
@@ -301,6 +326,8 @@ pubkey_to_bin(Network, {ecc_compact, PubKey}) ->
     end;
 pubkey_to_bin(Network, {ed25519, PubKey}) ->
     <<(from_network(Network)):4, ?KEYTYPE_ED25519:4, PubKey/binary>>;
+pubkey_to_bin(Network, {bls12_381, PubKey}) ->
+    <<(from_network(Network)):4, ?KEYTYPE_BLS12_381:4, PubKey/binary>>;
 pubkey_to_bin(Network, {multisig, M, N, KeysDigest}) ->
     <<
         (from_network(Network)):4,
@@ -327,6 +354,11 @@ bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PubKey:32/binary>>) 
 bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ED25519:4, PubKey:32/binary>>) ->
     case NetType == from_network(Network) of
         true -> {ed25519, PubKey};
+        false -> erlang:error({bad_network, NetType})
+    end;
+bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_BLS12_381:4, PubKey:48/binary>>) ->
+    case NetType == from_network(Network) of
+        true -> {bls12_381, PubKey};
         false -> erlang:error({bad_network, NetType})
     end;
 bin_to_pubkey(
@@ -394,6 +426,8 @@ key_size_bytes(?KEYTYPE_ED25519) ->
     32;
 key_size_bytes(?KEYTYPE_ECC_COMPACT) ->
     32;
+key_size_bytes(?KEYTYPE_BLS12_381) ->
+    48;
 key_size_bytes(KeyType) ->
     error({bad_key_type, KeyType}).
 
@@ -405,7 +439,9 @@ verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
 verify(Bin, Signature, {ecc_compact, PubKey}) ->
     public_key:verify(Bin, sha256, Signature, PubKey);
 verify(Bin, Signature, {ed25519, PubKey}) ->
-    enacl:sign_verify_detached(Signature, Bin, PubKey).
+    enacl:sign_verify_detached(Signature, Bin, PubKey);
+verify(Bin, Signature, {bls12_381, PubKey}) ->
+    tc_pubkey:verify(tc_pubkey:deserialize(PubKey), tc_signature:deserialize(Signature), Bin).
 
 -spec verify_multisig(binary(), binary(), pubkey_multi(), [atom()]) -> boolean().
 verify_multisig(Bin, MultiSignature, {multisig, M, N, KeysDigest}, HashTypes) ->
@@ -562,6 +598,8 @@ pubkey_is_multisig({multisig, _, _, _}) ->
 pubkey_is_multisig({ecc_compact, _}) ->
     false;
 pubkey_is_multisig({ed25519, _}) ->
+    false;
+pubkey_is_multisig({bls12_381, _}) ->
     false.
 
 %% @doc The binary form of this multisig-pubkey can be optained with

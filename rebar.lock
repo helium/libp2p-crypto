@@ -3,6 +3,10 @@
  {<<"ecc_compact">>,{pkg,<<"ecc_compact">>,<<"1.0.5">>},0},
  {<<"enacl">>,{pkg,<<"enacl">>,<<"1.1.1">>},0},
  {<<"erl_base58">>,{pkg,<<"erl_base58">>,<<"0.0.1">>},0},
+ {<<"erlang_tc">>,
+  {git,"https://github.com/helium/erlang-tc.git",
+       {ref,"588ca62467a1cbfe43d20e6f681656613dab0622"}},
+  0},
  {<<"multiaddr">>,{pkg,<<"multiaddr">>,<<"1.1.3">>},0},
  {<<"multihash">>,{pkg,<<"multihash">>,<<"2.1.0">>},0},
  {<<"small_ints">>,{pkg,<<"small_ints">>,<<"0.1.0">>},1}]}.

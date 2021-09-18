@@ -11,7 +11,6 @@ erln8.config
 /.eqc-info
 /coverage/
 codecov.json
-/current_counterexample.eqc
 *.dump
 *.crashdump
 GPATH
