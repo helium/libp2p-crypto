@@ -5,14 +5,16 @@
 
 This is a library of cryptography functions used by Helium's Erlang libp2p implementation.
 
-The library knows how to create and use two different types of key
-systems, [ecc_compact](https://hex.pm/packages/ecc_compact) and
-[ed25519](https://hex.pm/packages/enacl).
+The library knows how to create and use three different types of key
+systems:
 
-ecc_compact keys are used for addressing nodes in the system since
-there is hardware support for ECC operations, while ed25519 keys are
-used for user wallets since there are common browsed implementations
-for this kind of key.
+1. [ecc_compact](https://hex.pm/packages/ecc_compact),
+2. [ed25519](https://hex.pm/packages/enacl), and
+3. [secp256k1](https://www.secg.org/sec2-v2.pdf).
+
+ecc_compact keys are used for addressing hardware-constrained nodes in the
+system, while ed25519 and secp256k1 keys are used for user wallets since
+they are often managed by systems under less constraints.
 
 
 ## Using the library
@@ -34,12 +36,17 @@ Creating an ecc_compact keypair
 KeyMap = #{public := PubKey, secret := PrivKey} = libp2p_crypto:generate_keys(ecc_compact).
 ```
 
-And an ed25519 key:
+An ed25519 key:
 
 ```erlang
 KeyMap = #{public := PubKey, secret := PrivKey} = libp2p_crypto:generate_keys(ed25519).
 ```
 
+And a secp256k1 key:
+
+```erlang
+KeyMap = #{public := PubKey, secret := PrivKey} = libp2p_crypto:generate_keys(secp256k1).
+```
 
 ## Saving/Loading keys
 
@@ -47,7 +54,7 @@ Storing keypairs on disk should be considered very carefully from a
 security perspective since the resulting file will include both the
 public and private key.
 
-If the system supports hardware key storage use it instead of storing
+If the system supports hardware key storage, use it instead of storing
 secrets on disk. That said, many systems don't support hardware key
 storage so here is how to save keys:
 

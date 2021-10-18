@@ -12,6 +12,11 @@
 -define(KEYTYPE_ECC_COMPACT, 0).
 -define(KEYTYPE_ED25519, 1).
 -define(KEYTYPE_MULTISIG, 2).
+-define(KEYTYPE_SECP256K1, 3).
+%% Do not ever assign to the reserved slot, it must be used as an extension
+%% mechanism for future expansion, if needed.
+-define(KEYTYPE_RESERVED, 15).
+
 -define(NETTYPE_MAIN, 0).
 -define(NETTYPE_TEST, 1).
 
@@ -20,7 +25,8 @@
 
 -define(PRIMITIVE_KEY_TYPES, [
                               ecc_compact,
-                              ed25519
+                              ed25519,
+                              secp256k1
                              ]).
 
 %% used for testing and known/unknown checking
@@ -52,18 +58,20 @@
 ]).
 -define(MULTI_HASH_TYPES_DEPRECATED, []). %% used ONLY in verify
 
--type key_type() :: ecc_compact | ed25519.
+-type key_type() :: ecc_compact | ed25519 | secp256k1.
 -type network() :: mainnet | testnet.
 -opaque privkey() ::
     {ecc_compact, ecc_compact:private_key()}
-    | {ed25519, enacl_privkey()}.
+    | {ed25519, enacl_privkey()}
+    | {secp256k1, ecc_compact:private_key()}.
 
 -opaque pubkey_multi() ::
     {multisig, pos_integer(), pos_integer(), binary()}.
 
 -opaque pubkey_single() ::
-    {ecc_compact, ecc_compact:public_key()}
-    | {ed25519, enacl_pubkey()}.
+    {ecc_compact, ecc_compact:public_key_p256()}
+    | {ed25519, enacl_pubkey()}
+    | {secp256k1, ecc_compact:public_key_k256()}.
 
 -opaque pubkey() ::
     pubkey_single() | pubkey_multi().
@@ -149,7 +157,7 @@ generate_keys(KeyType) ->
 -spec generate_keys(network(), key_type()) -> key_map().
 generate_keys(Network, ecc_compact) ->
     {ok, PrivKey, CompactKey} = ecc_compact:generate_key(),
-    PubKey = ecc_compact:recover_key(CompactKey),
+    PubKey = ecc_compact:recover_compact_key(CompactKey),
     #{
         secret => {ecc_compact, PrivKey},
         public => {ecc_compact, PubKey},
@@ -160,6 +168,15 @@ generate_keys(Network, ed25519) ->
     #{
         secret => {ed25519, PrivKey},
         public => {ed25519, PubKey},
+        network => Network
+    };
+generate_keys(Network, secp256k1) ->
+    Key = public_key:generate_key({namedCurve,?secp256k1}),
+    #'ECPrivateKey'{parameters=Params, publicKey=PubKeyPoint} = Key,
+    PubKey = {#'ECPoint'{point = PubKeyPoint}, Params},
+    #{
+        secret => {secp256k1, Key},
+        public => {secp256k1, PubKey},
         network => Network
     }.
 
@@ -181,7 +198,9 @@ load_keys(FileName) ->
 mk_sig_fun({ecc_compact, PrivKey}) ->
     fun(Bin) -> public_key:sign(Bin, sha256, PrivKey) end;
 mk_sig_fun({ed25519, PrivKey}) ->
-    fun(Bin) -> enacl:sign_detached(Bin, PrivKey) end.
+    fun(Bin) -> enacl:sign_detached(Bin, PrivKey) end;
+mk_sig_fun({secp256k1, PrivKey}) ->
+    fun(Bin) -> public_key:sign(Bin, sha256, PrivKey) end.
 
 %% @doc Constructs an ECDH exchange function from a given private key.
 %%
@@ -199,6 +218,10 @@ mk_ecdh_fun({ed25519, PrivKey}) ->
             enacl:crypto_sign_ed25519_public_to_curve25519(PubKey),
             enacl:crypto_sign_ed25519_secret_to_curve25519(PrivKey)
         )
+    end;
+mk_ecdh_fun({secp256k1, PrivKey}) ->
+    fun({secp256k1, {PubKey, {namedCurve, ?secp256k1}}}) ->
+        public_key:compute_key(PubKey, PrivKey)
     end.
 
 %% @doc Store the given keys in a given filename. The keypair is
@@ -216,58 +239,58 @@ save_keys(KeysMap, FileName) when is_list(FileName) ->
 keys_to_bin(Keys = #{secret := {ecc_compact, PrivKey}, public := {ecc_compact, _PubKey}}) ->
     #'ECPrivateKey'{privateKey = PrivKeyBin, publicKey = PubKeyBin} = PrivKey,
     NetType = from_network(maps:get(network, Keys, mainnet)),
-    case byte_size(PrivKeyBin) of
-        32 ->
-            <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKeyBin:32/binary, PubKeyBin/binary>>;
-        31 ->
-            %% sometimes a key is only 31 bytes
-            <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, 0:8/integer, PrivKeyBin:31/binary,
-                PubKeyBin/binary>>
-    end;
+    %% public_key produces a private key with its leading zero bytes stripped.
+    PaddedPrivKeyBin = pad_ecc_256_scalar(PrivKeyBin),
+    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PaddedPrivKeyBin:32/binary, PubKeyBin:65/binary>>;
 keys_to_bin(Keys = #{secret := {ed25519, PrivKey}, public := {ed25519, PubKey}}) ->
     NetType = from_network(maps:get(network, Keys, mainnet)),
-    <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/binary>>.
+    <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/binary>>;
+keys_to_bin(Keys = #{secret := {secp256k1, PrivKey}, public := {secp256k1, _PubKey}}) ->
+    #'ECPrivateKey'{privateKey = PrivKeyBin, publicKey = PubKeyBin} = PrivKey,
+    NetType = from_network(maps:get(network, Keys, mainnet)),
+    %% public_key produces a private key with its leading zero bytes stripped.
+    PaddedPrivKeyBin = pad_ecc_256_scalar(PrivKeyBin),
+    <<NetType:4, ?KEYTYPE_SECP256K1:4, PaddedPrivKeyBin:32/binary, PubKeyBin:65/binary>>.
 
 %% @doc Convers a given binary to a key map
 -spec keys_from_bin(binary()) -> key_map().
-%% Support the Helium Rust wallet format, which unfortunately duplicates the network
-%% and key type just before the public key.
+
+%% Support the Helium Rust wallet format, which deviates from this Erlang
+%% implementation in two important ways:
+%%     1. It duplicates the network and key type just before the public key.
+%%     2. For those key types which are compressible, it compresses the public
+%%        key.
 keys_from_bin(
     <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey:32/binary, NetType:4, ?KEYTYPE_ECC_COMPACT:4,
-        PubKey:32/binary>>
+        PubKeyX:32/binary>>
 ) ->
-    {#'ECPoint'{point = PubKeyBin}, _} = ecc_compact:recover_key(PubKey),
-    keys_from_bin(<<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey/binary, PubKeyBin/binary>>);
+    {#'ECPoint'{point = PubKeyBin}, _} = ecc_compact:recover_compact_key(PubKeyX),
+    keys_from_bin(<<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey:32/binary, PubKeyBin:65/binary>>);
 keys_from_bin(
     <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, NetType:4, ?KEYTYPE_ED25519:4,
         PubKey:32/binary>>
 ) ->
     keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey/binary, PubKey/binary>>);
-%% Followed by the convention uses in this library
 keys_from_bin(
-    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, 0:8/integer, PrivKeyBin:31/binary, PubKeyBin/binary>>
+    <<NetType:4, ?KEYTYPE_SECP256K1:4, PrivKey:32/binary, NetType:4, ?KEYTYPE_SECP256K1:4,
+        PubKeyC:33/binary>>
+) ->
+    {#'ECPoint'{point = PubKeyBin}, _} = ecc_compact:recover_compressed_key(PubKeyC),
+    keys_from_bin(<<NetType:4, ?KEYTYPE_SECP256K1:4, PrivKey:32/binary, PubKeyBin:65/binary>>);
+
+%% These routines follow the established storage conventions that have been 
+%% used in this (Erlang) library.
+keys_from_bin(
+    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKeyBin:32/binary, PubKeyBin:65/binary>>
 ) ->
     Params = {namedCurve, ?secp256r1},
+    %% Erlang public_key prefers to store private key scalars with their
+    %% leading zero bytes removed.
+    ReducedPrivKeyBin = reduce_ecc_256_scalar(PrivKeyBin),
     PrivKey = #'ECPrivateKey'{
         version = 1,
         parameters = Params,
-        privateKey = PrivKeyBin,
-        publicKey = PubKeyBin
-    },
-    PubKey = {#'ECPoint'{point = PubKeyBin}, Params},
-    #{
-        secret => {ecc_compact, PrivKey},
-        public => {ecc_compact, PubKey},
-        network => to_network(NetType)
-    };
-keys_from_bin(
-    <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKeyBin:32/binary, PubKeyBin/binary>>
-) ->
-    Params = {namedCurve, ?secp256r1},
-    PrivKey = #'ECPrivateKey'{
-        version = 1,
-        parameters = Params,
-        privateKey = PrivKeyBin,
+        privateKey = ReducedPrivKeyBin,
         publicKey = PubKeyBin
     },
     PubKey = {#'ECPoint'{point = PubKeyBin}, Params},
@@ -277,19 +300,38 @@ keys_from_bin(
         network => to_network(NetType)
     };
 keys_from_bin(<<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, PubKey:32/binary>>) ->
-    #{
+   #{
         secret => {ed25519, PrivKey},
         public => {ed25519, PubKey},
         network => to_network(NetType)
+    };
+keys_from_bin(
+    <<NetType:4, ?KEYTYPE_SECP256K1:4, PrivKeyBin:32/binary, PubKeyBin:65/binary>>
+) ->
+    Params = {namedCurve, ?secp256k1},
+    %% Erlang public_key prefers to store private key scalars with their
+    %% leading zero bytes removed.
+    ReducedPrivKeyBin = reduce_ecc_256_scalar(PrivKeyBin),
+    PrivKey = #'ECPrivateKey'{
+        version = 1,
+        parameters = Params,
+        privateKey = ReducedPrivKeyBin,
+        publicKey = PubKeyBin
+    },
+    PubKey = {#'ECPoint'{point = PubKeyBin}, Params},
+    #{
+        secret => {secp256k1, PrivKey},
+        public => {secp256k1, PubKey},
+        network => to_network(NetType)
     }.
 
-%% @doc Convertsa a given tagged public key to its binary form on the current
+%% @doc Converts a a given tagged public key to its binary form on the current
 %% network.
 -spec pubkey_to_bin(pubkey()) -> pubkey_bin().
 pubkey_to_bin(PubKey) ->
     pubkey_to_bin(get_network(mainnet), PubKey).
 
-%% @doc Convertsa a given tagged public key to its binary form on the given
+%% @doc Converts a given tagged public key to its binary form on the given
 %% network.
 -spec pubkey_to_bin(network(), pubkey()) -> pubkey_bin().
 pubkey_to_bin(Network, {ecc_compact, PubKey}) ->
@@ -308,7 +350,12 @@ pubkey_to_bin(Network, {multisig, M, N, KeysDigest}) ->
         M:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
         N:?MULTISIG_KEY_INDEX_BITS/integer-unsigned-little,
         KeysDigest/binary
-    >>.
+    >>;
+pubkey_to_bin(Network, {secp256k1, PubKey}) ->
+    %% Compress the public key point
+    {#'ECPoint'{point=PubPoint}, _Params} = PubKey,
+    CompressedPoint = compress_ecc_256_point(PubPoint),
+    <<(from_network(Network)):4, ?KEYTYPE_SECP256K1:4, CompressedPoint:33/binary>>.
 
 %% @doc Converts a a given binary encoded public key to a tagged public
 %% key. The key is asserted to be on the current active network.
@@ -316,12 +363,12 @@ pubkey_to_bin(Network, {multisig, M, N, KeysDigest}) ->
 bin_to_pubkey(PubKeyBin) ->
     bin_to_pubkey(get_network(mainnet), PubKeyBin).
 
-%% @doc Convertsa a given binary encoded public key to a tagged public key. If
+%% @doc Converts a a given binary encoded public key to a tagged public key. If
 %% the given binary is not on the specified network a bad_network is thrown.
 -spec bin_to_pubkey(network(), pubkey_bin()) -> pubkey().
 bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PubKey:32/binary>>) ->
     case NetType == from_network(Network) of
-        true -> {ecc_compact, ecc_compact:recover_key(PubKey)};
+        true -> {ecc_compact, ecc_compact:recover_compact_key(PubKey)};
         false -> erlang:error({bad_network, NetType})
     end;
 bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ED25519:4, PubKey:32/binary>>) ->
@@ -352,6 +399,11 @@ bin_to_pubkey(
                 false ->
                     erlang:error({m_higher_than_n, M, N})
             end;
+        false -> erlang:error({bad_network, NetType})
+    end;
+bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_SECP256K1:4, ComprPubKey:33/binary>>) ->
+    case NetType == from_network(Network) of
+        true -> {secp256k1, ecc_compact:recover_compressed_key(ComprPubKey)};
         false -> erlang:error({bad_network, NetType})
     end.
 
@@ -394,6 +446,8 @@ key_size_bytes(?KEYTYPE_ED25519) ->
     32;
 key_size_bytes(?KEYTYPE_ECC_COMPACT) ->
     32;
+key_size_bytes(?KEYTYPE_SECP256K1) ->
+    33;
 key_size_bytes(KeyType) ->
     error({bad_key_type, KeyType}).
 
@@ -405,7 +459,9 @@ verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
 verify(Bin, Signature, {ecc_compact, PubKey}) ->
     public_key:verify(Bin, sha256, Signature, PubKey);
 verify(Bin, Signature, {ed25519, PubKey}) ->
-    enacl:sign_verify_detached(Signature, Bin, PubKey).
+    enacl:sign_verify_detached(Signature, Bin, PubKey);
+verify(Bin, Signature, {secp256k1, PubKey}) ->
+    public_key:verify(Bin, sha256, Signature, PubKey).
 
 -spec verify_multisig(binary(), binary(), pubkey_multi(), [atom()]) -> boolean().
 verify_multisig(Bin, MultiSignature, {multisig, M, N, KeysDigest}, HashTypes) ->
@@ -562,6 +618,8 @@ pubkey_is_multisig({multisig, _, _, _}) ->
 pubkey_is_multisig({ecc_compact, _}) ->
     false;
 pubkey_is_multisig({ed25519, _}) ->
+    false;
+pubkey_is_multisig({secp256k1, _}) ->
     false.
 
 %% @doc The binary form of this multisig-pubkey can be optained with
@@ -724,6 +782,35 @@ isig_to_bin({I, <<Sig/binary>>}) ->
         Len:?MULTISIG_SIG_LEN_BYTES/integer-unsigned-little,
         Sig/binary
     >>.
+
+%% Consistently pad a private key scalar so that it is always 32 bytes.
+-spec pad_ecc_256_scalar(binary()) -> binary().
+pad_ecc_256_scalar(<<NoPadNeeded:32/binary>>) ->
+    NoPadNeeded;
+pad_ecc_256_scalar(<<NeedsPadding/binary>>) ->
+    BytesShort = 32 - byte_size(NeedsPadding),
+    ZeroBytes = <<0:(BytesShort*8)>>,
+    <<ZeroBytes/binary, NeedsPadding/binary>>.
+
+%% Remove leading zero bytes from a big-endian bignum buffer
+-spec reduce_ecc_256_scalar(binary()) -> binary().
+reduce_ecc_256_scalar(<<0, BigNum/binary>>) ->
+    reduce_ecc_256_scalar(BigNum);
+reduce_ecc_256_scalar(<<BigNum/binary>>) ->
+    BigNum.
+
+%% Compute a point tag (the integer 2 or 3) to represent the compressed
+%% Y coordinate for a 256-bit elliptic curve point.
+-spec point_tag_for_ecc_256_scalar(binary()) -> non_neg_integer().
+point_tag_for_ecc_256_scalar(<<_Upper:31/binary, Bottom:8/unsigned-integer>>) ->
+    2 + (Bottom rem 2).
+
+%% Compress an elliptic curve point.
+-spec compress_ecc_256_point(binary()) -> binary().
+compress_ecc_256_point(<<TaggedPoint:65/binary>>) ->
+    <<4, XCoordinate:32/binary, YCoordinate:32/binary>> = TaggedPoint,
+    Tag = point_tag_for_ecc_256_scalar(YCoordinate),
+    <<Tag, XCoordinate/binary>>.
 
 -ifdef(TEST).
 
@@ -1088,6 +1175,8 @@ save_load_test() ->
     SaveLoad(testnet, ecc_compact),
     SaveLoad(mainnet, ed25519),
     SaveLoad(testnet, ed25519),
+    SaveLoad(mainnet, secp256k1),
+    SaveLoad(testnet, secp256k1),
 
     {error, _} = load_keys("no_such_file"),
     ok.
@@ -1117,14 +1206,17 @@ address_test() ->
 
     Roundtrip(ecc_compact),
     Roundtrip(ed25519),
+    Roundtrip(secp256k1),
 
     set_network(mainnet),
     Roundtrip(ecc_compact),
     Roundtrip(ed25519),
+    Roundtrip(secp256k1),
 
     set_network(testnet),
     Roundtrip(ecc_compact),
     Roundtrip(ed25519),
+    Roundtrip(secp256k1),
 
     ok.
 
@@ -1141,6 +1233,7 @@ verify_sign_test() ->
 
     Verify(ecc_compact),
     Verify(ed25519),
+    Verify(secp256k1),
 
     ok.
 
@@ -1158,6 +1251,7 @@ verify_ecdh_test() ->
 
     Verify(ecc_compact),
     Verify(ed25519),
+    Verify(secp256k1),
 
     ok.
 
@@ -1263,6 +1357,28 @@ helium_wallet_decode_ecc_compact_test() ->
     KeyMap = keys_from_bin(FakeTestnetKeyPair),
     ?assertEqual(FakeTestnetKeyMap, KeyMap),
     ok.
+
+point_compress_even_test() ->
+    %% A k256 public key point with an even Y-coordinate.
+    EvenYKey =
+        <<4,96,208,77,104,198,60,254,164,98,63,137,248,175,65,151,142,
+          67,192,223,39,122,40,162,139,152,82,181,33,130,160,232,206,
+          210,81,255,21,59,227,197,245,116,226,146,87,254,223,114,215,
+          77,82,108,166,10,22,186,72,85,119,155,25,100,141,231,228>>,
+    <<4, XCoordinate:32/binary, _YCoordinate:32/binary>> = EvenYKey,
+    Expect = <<2, XCoordinate:32/binary>>,
+    ?assertEqual(compress_ecc_256_point(EvenYKey), Expect).
+
+point_compress_odd_test() ->
+    %% A k256 public key point with an odd Y-coordinate.
+    OddYKey =
+        <<4,198,148,223,114,141,97,92,50,2,119,52,132,135,74,86,152,
+          86,151,212,196,29,141,240,191,206,136,179,113,154,21,246,
+          140,47,252,2,53,108,192,138,6,133,162,195,4,177,125,160,200,
+          22,102,188,89,214,120,43,115,16,60,225,91,230,34,88,185>>,
+    <<4, XCoordinate:32/binary, _YCoordinate:32/binary>> = OddYKey,
+    Expect = <<3, XCoordinate:32/binary>>,
+    ?assertEqual(compress_ecc_256_point(OddYKey), Expect).
 
 %% Test helpers ===============================================================
 
