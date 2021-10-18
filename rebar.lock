@@ -1,9 +1,6 @@
 {"1.1.0",
 [{<<"base32">>,{pkg,<<"base32">>,<<"0.1.0">>},1},
- {<<"ecc_compact">>,
-  {git,"git://github.com/helium/ecc_compact",
-       {ref,"0410416782f75a0db91ec17110377e022faab1cd"}},
-  0},
+ {<<"ecc_compact">>,{pkg,<<"ecc_compact">>,<<"1.1.0">>},0},
  {<<"enacl">>,{pkg,<<"enacl">>,<<"1.1.1">>},0},
  {<<"erl_base58">>,{pkg,<<"erl_base58">>,<<"0.0.1">>},0},
  {<<"multiaddr">>,{pkg,<<"multiaddr">>,<<"1.1.3">>},0},
@@ -12,6 +9,7 @@
 [
 {pkg_hash,[
  {<<"base32">>, <<"044F6DC95709727CA2176F3E97A41DDAA76B5BC690D3536908618C0CB32616A2">>},
+ {<<"ecc_compact">>, <<"78CA96FD6C8CEF91990A4B1E243E6682DED46CEEAF1C0D154EA19A2A0679A239">>},
  {<<"enacl">>, <<"F65DC64D9BFF2D8A534CB77AEF14DA5E7A2FA148987D87856F79A4745C9C2627">>},
  {<<"erl_base58">>, <<"37710854461D71DF338E73C65776302DB41C4BAB4674D2EC134ED7BCFC7B5552">>},
  {<<"multiaddr">>, <<"978E58E28F6FACAF428C87AF933612B1E2F3F2775F1794EDA5E831A4EACD2984">>},
