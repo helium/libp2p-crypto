@@ -45,7 +45,7 @@ prop_multipubkey_test() ->
     ).
 
 gen_keytype() ->
-    elements([ecc_compact, ed25519]).
+    elements([ecc_compact, ed25519, secp256k1]).
 
 gen_m_n() ->
     ?SUCHTHAT({M, N}, {int(), int()}, (N > M andalso N =< 255 andalso M >= 1)).
