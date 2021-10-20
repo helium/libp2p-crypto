@@ -1256,6 +1256,10 @@ verify_ecdh_test() ->
     ok.
 
 %% erlfmt-ignore
+%% Tests that a shortened private scalar, that is, one with at least eight
+%% upper bits set to zero, and thus, whose Erlang `public_key` representation
+%% is one byte _shorter_ than normal, is nonetheless encoded and decoded
+%% properly when converted to "network" order.
 round_trip_short_key_test() ->
     ShortKeyMap = #{
         network => mainnet,
@@ -1271,6 +1275,7 @@ round_trip_short_key_test() ->
         secret =>
             {ecc_compact,
                 {'ECPrivateKey', 1,
+                    %% 31-byte secret scalar, which is shorter than usual.
                     <<49, 94, 129, 63, 91, 89, 3, 86, 29, 23, 158, 86, 76, 180, 129, 140,
                         194, 25, 52, 94, 141, 36, 222, 112, 234, 227, 33, 172, 94, 168,
                         123>>,
@@ -1353,6 +1358,54 @@ helium_wallet_decode_ecc_compact_test() ->
         35,41,75,130,51,74,141,42,34,140,61,222,93,12,
         114,10,238,142,214,23,56,70,82,128,107,100,190,75,80,92,
         66,106
+        >>,
+    KeyMap = keys_from_bin(FakeTestnetKeyPair),
+    ?assertEqual(FakeTestnetKeyMap, KeyMap),
+    ok.
+
+helium_wallet_decode_secp256k1_test() ->
+    SecretScalar =
+        <<
+        190,128,116,196,254,23,187,15,144,132,151,42,101,25,208,55,
+        230,57,95,133,116,49,92,54,145,146,146,146,215,212,156,183
+        >>,
+    PublicXCoordinate =
+        <<
+        198,96,223,36,131,163,194,45,123,135,11,238,13,137,233,
+        114,248,44,37,248,44,197,12,62,31,23,13,71,195,232,227,145
+        >>,
+    PublicYCoordinate =
+        <<
+        21,115,230,18,45,170,107,253,143,215,150,112,246,40,186,123,
+        242,186,195,160,11,105,100,162,11,126,33,62,194,111,154,71
+        >>,
+    TaggedFullPublicPoint =
+        <<
+        4,  %% Full point-pair tag
+        PublicXCoordinate/binary,
+        PublicYCoordinate/binary
+        >>,
+    Curve = {namedCurve,{1,3,132,0,10}},
+    FakeTestnetKeyMap = #{
+        network => testnet,
+        public =>
+            {secp256k1,{{'ECPoint', TaggedFullPublicPoint}, Curve}},
+      secret =>
+          {secp256k1,{'ECPrivateKey', 1, SecretScalar, Curve,
+            TaggedFullPublicPoint
+            }}},
+    FakeTestnetKeyPair =
+        <<
+        %% network type byte (testnet, secp256k1)
+        16#13,
+        %% 32 byte private key
+        SecretScalar/binary,
+        %% repeated type byte
+        16#13,
+        %% odd-y tag
+        3,
+        %% 32-byte public X coordinate
+        PublicXCoordinate/binary
         >>,
     KeyMap = keys_from_bin(FakeTestnetKeyPair),
     ?assertEqual(FakeTestnetKeyMap, KeyMap),
