@@ -1172,8 +1172,15 @@ batch_verify_test() ->
         end,
         [MakeSubBatch(N) || N <- lists:seq(1, 32)]
     end,
-    ?assertEqual(true, verify(MakeBatch(<<>>))),
-    ?assertEqual(false, verify(MakeBatch(<<"garbage">>))),
+
+    %% Warm up cache
+    GoodBatch = MakeBatch(<<>>),
+    ?assertEqual(true, verify(GoodBatch)),
+    %% Run it again
+    ?assertEqual(true, verify(GoodBatch)),
+
+    CorruptedBatch = MakeBatch(<<"garbage">>),
+    ?assertEqual(false, verify(CorruptedBatch)),
 
     ok.
 
