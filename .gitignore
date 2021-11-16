@@ -22,4 +22,7 @@ log/
 data/
 src/pb/
 gh_pages/
-doc/
+doc
+
+# NIF
+so-path

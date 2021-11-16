@@ -108,6 +108,7 @@
     b58_to_pubkey/2,
     pubkey_bin_to_p2p/1,
     p2p_to_pubkey_bin/1,
+    verify/1,
     verify/3,
     keys_to_bin/1,
     keys_from_bin/1,
@@ -396,6 +397,16 @@ key_size_bytes(?KEYTYPE_ECC_COMPACT) ->
     32;
 key_size_bytes(KeyType) ->
     error({bad_key_type, KeyType}).
+
+%% @doc Verify a batch of signatures.
+-spec verify(
+    Batch :: [{Bin :: binary(), [{Signature :: binary(), CompactEccKey :: binary()}, ...]}]
+) -> boolean().
+verify(Batch) ->
+    case libp2p_crypto_nif:verify(Batch) of
+        ok -> true;
+        {error, _Reason} -> false
+    end.
 
 %% @doc Verifies a binary against a given digital signature.
 -spec verify(binary(), binary(), pubkey()) -> boolean().
@@ -1142,6 +1153,27 @@ verify_sign_test() ->
 
     Verify(ecc_compact),
     Verify(ed25519),
+
+    ok.
+
+batch_verify_test() ->
+    MakeBatch = fun (MsgCorruption) ->
+        MakeSubBatch = fun (N) ->
+            Msg = <<<<"sign me please ">>/binary, <<N/integer>>/binary>>,
+            Sign = fun () ->
+                #{secret := PrivKey, public := {ecc_compact, {{'ECPoint', PubKeyBin}, _}}} =
+                    generate_keys(ecc_compact),
+                Sign = mk_sig_fun(PrivKey),
+                Signature = Sign(Msg),
+                {Signature, PubKeyBin}
+            end,
+            KeySigs = [Sign() || _ <- lists:seq(1, N)],
+            {<<Msg/binary, MsgCorruption/binary>>, KeySigs}
+        end,
+        [MakeSubBatch(N) || N <- lists:seq(1, 32)]
+    end,
+    ?assertEqual(true, verify(MakeBatch(<<>>))),
+    ?assertEqual(false, verify(MakeBatch(<<"garbage">>))),
 
     ok.
 
