@@ -1180,7 +1180,6 @@ batch_verify_test() ->
         [MakeSubBatch(N) || N <- lists:seq(1, 32)]
     end,
 
-    %% Warm up cache
     GoodBatch = MakeBatch(<<>>),
     ?assertEqual(true, verify(GoodBatch)),
 
@@ -1188,6 +1187,20 @@ batch_verify_test() ->
     ?assertEqual(false, verify(CorruptedBatch)),
 
     ok.
+
+batch_cross_verify_test_() ->
+    KeyType = ecc_compact,
+    #{secret := PrivKey, public := PubKey} = generate_keys(KeyType),
+    Sign = mk_sig_fun(PrivKey),
+    Msg = <<"secret message">>,
+    Sig = Sign(Msg),
+    MsgBad = <<Msg/binary, "foo">>,
+    [
+        ?_assert(verify(Msg, Sig, PubKey)),
+        ?_assert(verify([{Msg, [{Sig, pubkey_to_bin(PubKey)}]}])),
+        ?_assertNot(verify(MsgBad, Sig, PubKey)),
+        ?_assertNot(verify([{MsgBad, [{Sig, pubkey_to_bin(PubKey)}]}]))
+    ].
 
 verify_ecdh_test() ->
     Verify = fun(KeyType) ->
