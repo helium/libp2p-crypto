@@ -5,7 +5,7 @@
 -export([load/0, verify/1]).
 
 -spec verify(
-    Batch :: [{Bin :: binary(), [{Signature :: binary(), CompactEccKey :: binary()}, ...]}]
+    Batch :: [{Bin :: binary(), [{Signature :: binary(), PubKeyBin :: libp2p_crypto:pubkey_bin()}, ...]}]
 ) -> ok | {error, Reason :: binary()}.
 verify(_Batch) ->
     not_loaded(?LINE).
