@@ -12,6 +12,4 @@ path = "native/lib.rs"
 
 [dependencies]
 helium-crypto = { git = "https://github.com/helium/helium-crypto-rs.git", tag = "v0.3.1" }
-once_cell = "*"
 rustler = { git = "https://github.com/rusterlium/rustler.git", branch = "master" }
-caches = "*"
