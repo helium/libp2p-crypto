@@ -743,6 +743,50 @@ isig_to_bin({I, <<Sig/binary>>}) ->
 
 -include_lib("eunit/include/eunit.hrl").
 
+batch_verify_test() ->
+    MakeBatch = fun (MsgCorruption) ->
+        MakeSubBatch = fun (N) ->
+            Msg = <<<<"sign me please ">>/binary, <<N/integer>>/binary>>,
+            Sign = fun (Kn) ->
+                KeyType = case Kn rem 2 == 1 of
+                  true -> ecc_compact;
+                  false -> ed25519
+                end,
+                #{secret := PrivKey, public := PubKey} =
+                    generate_keys(KeyType),
+                Sign = mk_sig_fun(PrivKey),
+                Signature = Sign(Msg),
+                PubKeyBin = pubkey_to_bin(PubKey),
+                {Signature, PubKeyBin}
+            end,
+            KeySigs = [Sign(X) || X <- lists:seq(1, N)],
+            {<<Msg/binary, MsgCorruption/binary>>, KeySigs}
+        end,
+        [MakeSubBatch(N) || N <- lists:seq(1, 32)]
+    end,
+
+    GoodBatch = MakeBatch(<<>>),
+    ?assertEqual(true, verify(GoodBatch)),
+
+    CorruptedBatch = MakeBatch(<<"garbage">>),
+    ?assertEqual(false, verify(CorruptedBatch)),
+
+    ok.
+
+batch_cross_verify_test_() ->
+    KeyType = ecc_compact,
+    #{secret := PrivKey, public := PubKey} = generate_keys(KeyType),
+    Sign = mk_sig_fun(PrivKey),
+    Msg = <<"secret message">>,
+    Sig = Sign(Msg),
+    MsgBad = <<Msg/binary, "foo">>,
+    [
+        ?_assert(verify(Msg, Sig, PubKey)),
+        ?_assert(verify([{Msg, [{Sig, pubkey_to_bin(PubKey)}]}])),
+        ?_assertNot(verify(MsgBad, Sig, PubKey)),
+        ?_assertNot(verify([{MsgBad, [{Sig, pubkey_to_bin(PubKey)}]}]))
+    ].
+
 %% @doc Generates an EUnit test-set from the given parameters.
 %% For test-set representation details see:
 %% http://erlang.org/doc/apps/eunit/chapter.html#eunit-test-representation
@@ -1157,50 +1201,6 @@ verify_sign_test() ->
     Verify(ed25519),
 
     ok.
-
-batch_verify_test() ->
-    MakeBatch = fun (MsgCorruption) ->
-        MakeSubBatch = fun (N) ->
-            Msg = <<<<"sign me please ">>/binary, <<N/integer>>/binary>>,
-            Sign = fun (Kn) ->
-                KeyType = case Kn rem 2 == 1 of
-                  true -> ecc_compact;
-                  false -> ed25519
-                end,
-                #{secret := PrivKey, public := PubKey} =
-                    generate_keys(KeyType),
-                Sign = mk_sig_fun(PrivKey),
-                Signature = Sign(Msg),
-                PubKeyBin = pubkey_to_bin(PubKey),
-                {Signature, PubKeyBin}
-            end,
-            KeySigs = [Sign(X) || X <- lists:seq(1, N)],
-            {<<Msg/binary, MsgCorruption/binary>>, KeySigs}
-        end,
-        [MakeSubBatch(N) || N <- lists:seq(1, 32)]
-    end,
-
-    GoodBatch = MakeBatch(<<>>),
-    ?assertEqual(true, verify(GoodBatch)),
-
-    CorruptedBatch = MakeBatch(<<"garbage">>),
-    ?assertEqual(false, verify(CorruptedBatch)),
-
-    ok.
-
-batch_cross_verify_test_() ->
-    KeyType = ecc_compact,
-    #{secret := PrivKey, public := PubKey} = generate_keys(KeyType),
-    Sign = mk_sig_fun(PrivKey),
-    Msg = <<"secret message">>,
-    Sig = Sign(Msg),
-    MsgBad = <<Msg/binary, "foo">>,
-    [
-        ?_assert(verify(Msg, Sig, PubKey)),
-        ?_assert(verify([{Msg, [{Sig, pubkey_to_bin(PubKey)}]}])),
-        ?_assertNot(verify(MsgBad, Sig, PubKey)),
-        ?_assertNot(verify([{MsgBad, [{Sig, pubkey_to_bin(PubKey)}]}]))
-    ].
 
 verify_ecdh_test() ->
     Verify = fun(KeyType) ->
