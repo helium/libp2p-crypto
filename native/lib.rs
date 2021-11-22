@@ -2,28 +2,35 @@ mod droptimer;
 
 use helium_crypto::{ecc_compact, ed25519, KeyType, Verify};
 use rayon::prelude::*;
-use rustler::{Atom, Binary, Error as NifError, ListIterator, NifResult, Term};
+use rustler::{Atom, Binary, Error as NifError, NifResult, Term};
 use std::convert::TryFrom;
 
 // -spec verify(
 //     [{Bin :: binary(), [{Signature :: binary(), PubKeyBin :: libp2p_crypto:pubkey_bin()}, ...]}]
 // ) -> ok | {error, Reason :: binary()}.
 #[rustler::nif(name = "verify", schedule = "DirtyCpu")]
-fn verify_1(batch: ListIterator) -> NifResult<Atom> {
+fn verify_1(batch: Vec<Term>) -> NifResult<Atom> {
     // let _timer = droptimer::DropTimer::new();
-    for sub_batch in batch.map(|term| term.decode::<(Binary, Vec<Term>)>()) {
-        let (msg, list) = sub_batch?;
-        let msg = msg.as_slice();
-        list.into_par_iter()
-            .try_for_each(|pair| verify_one(msg, pair))
-            .map_err(|e| NifError::Term(Box::new(e)))?;
-    }
+    batch
+        .into_par_iter()
+        .try_for_each(verify_sub_batch)
+        .map_err(|e| NifError::Term(Box::new(e)))?;
 
     Ok(atoms::ok())
 }
 
-fn verify_one(msg: &[u8], term: Term) -> Result<(), String> {
-    let (signature, pubkey_bin) = term
+fn verify_sub_batch(sub_batch: Term) -> Result<(), String> {
+    let (msg, signatories) = sub_batch
+        .decode::<(Binary, Vec<Term>)>()
+        .map_err(|_| "sub_batch".to_owned())?;
+    let msg = msg.as_slice();
+    signatories
+        .into_par_iter()
+        .try_for_each(|signatory| verify_one(msg, signatory))
+}
+
+fn verify_one(msg: &[u8], signatory: Term) -> Result<(), String> {
+    let (signature, pubkey_bin) = signatory
         .decode::<(Binary, Binary)>()
         .map_err(|_| "decode".to_owned())?;
     let key_type: KeyType = pubkey_bin
