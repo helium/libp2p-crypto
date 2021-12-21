@@ -74,6 +74,7 @@
 -type key_map() :: #{secret => privkey(), public => pubkey(), network => network()}.
 -type enacl_privkey() :: <<_:256>>.
 -type enacl_pubkey() :: <<_:256>>.
+-type sig_batch() :: [{Msg :: binary(), [{Signature :: binary(), PubKeyBin :: pubkey_bin()}, ...]}].
 
 -export_type([
     privkey/0,
@@ -82,7 +83,8 @@
     pubkey_multi/0,
     pubkey_single/0,
     sig_fun/0,
-    ecdh_fun/0
+    ecdh_fun/0,
+    sig_batch/0
 ]).
 
 -export([
@@ -399,9 +401,7 @@ key_size_bytes(KeyType) ->
     error({bad_key_type, KeyType}).
 
 %% @doc Verify a batch of signatures.
--spec verify(
-    Batch :: [{Bin :: binary(), [{Signature :: binary(), PubKeyBin :: pubkey_bin()}, ...]}]
-) -> boolean().
+-spec verify(Batch :: sig_batch()) -> boolean().
 verify(Batch) ->
     case libp2p_crypto_nif:verify(Batch) of
         ok ->
