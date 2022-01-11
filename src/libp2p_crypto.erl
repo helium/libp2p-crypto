@@ -149,7 +149,7 @@ generate_keys(KeyType) ->
 -spec generate_keys(network(), key_type()) -> key_map().
 generate_keys(Network, ecc_compact) ->
     {ok, PrivKey, CompactKey} = ecc_compact:generate_key(),
-    PubKey = ecc_compact:recover_key(CompactKey),
+    PubKey = ecc_compact:recover_compact_key(CompactKey),
     #{
         secret => {ecc_compact, PrivKey},
         public => {ecc_compact, PubKey},
@@ -236,7 +236,7 @@ keys_from_bin(
     <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey:32/binary, NetType:4, ?KEYTYPE_ECC_COMPACT:4,
         PubKey:32/binary>>
 ) ->
-    {#'ECPoint'{point = PubKeyBin}, _} = ecc_compact:recover_key(PubKey),
+    {#'ECPoint'{point = PubKeyBin}, _} = ecc_compact:recover_compact_key(PubKey),
     keys_from_bin(<<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PrivKey/binary, PubKeyBin/binary>>);
 keys_from_bin(
     <<NetType:4, ?KEYTYPE_ED25519:4, PrivKey:64/binary, NetType:4, ?KEYTYPE_ED25519:4,
@@ -321,7 +321,7 @@ bin_to_pubkey(PubKeyBin) ->
 -spec bin_to_pubkey(network(), pubkey_bin()) -> pubkey().
 bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ECC_COMPACT:4, PubKey:32/binary>>) ->
     case NetType == from_network(Network) of
-        true -> {ecc_compact, ecc_compact:recover_key(PubKey)};
+        true -> {ecc_compact, ecc_compact:recover_compact_key(PubKey)};
         false -> erlang:error({bad_network, NetType})
     end;
 bin_to_pubkey(Network, <<NetType:4, ?KEYTYPE_ED25519:4, PubKey:32/binary>>) ->
