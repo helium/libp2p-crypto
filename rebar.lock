@@ -1,7 +1,10 @@
 {"1.1.0",
 [{<<"base32">>,{pkg,<<"base32">>,<<"0.1.0">>},1},
- {<<"ecc_compact">>,{pkg,<<"ecc_compact">>,<<"1.0.5">>},0},
- {<<"enacl">>,{pkg,<<"enacl">>,<<"1.1.1">>},0},
+ {<<"ecc_compact">>,{pkg,<<"ecc_compact">>,<<"1.1.1">>},0},
+ {<<"enacl">>,
+  {git,"https://github.com/helium/enacl",
+       {ref,"efb74b1af1df7f46f6ade488f16ec365af3ce47f"}},
+  0},
  {<<"erl_base58">>,{pkg,<<"erl_base58">>,<<"0.0.1">>},0},
  {<<"multiaddr">>,{pkg,<<"multiaddr">>,<<"1.1.3">>},0},
  {<<"multihash">>,{pkg,<<"multihash">>,<<"2.1.0">>},0},
@@ -9,8 +12,7 @@
 [
 {pkg_hash,[
  {<<"base32">>, <<"044F6DC95709727CA2176F3E97A41DDAA76B5BC690D3536908618C0CB32616A2">>},
- {<<"ecc_compact">>, <<"C9696FF16A1D721F2DC8CCD760440B8F45586522974C5C7BD88640822E08AACA">>},
- {<<"enacl">>, <<"F65DC64D9BFF2D8A534CB77AEF14DA5E7A2FA148987D87856F79A4745C9C2627">>},
+ {<<"ecc_compact">>, <<"D45197DB76EEBD22B144552795C1950DD07B013D591EA2C3A8DE22F8EE6C132B">>},
  {<<"erl_base58">>, <<"37710854461D71DF338E73C65776302DB41C4BAB4674D2EC134ED7BCFC7B5552">>},
  {<<"multiaddr">>, <<"978E58E28F6FACAF428C87AF933612B1E2F3F2775F1794EDA5E831A4EACD2984">>},
  {<<"multihash">>, <<"F084F7C6BEC062F0C0E82AE18CFDC8DAEC8F4FAA4C8E1ACE0B9C676A9323162F">>},
