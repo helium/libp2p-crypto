@@ -12,23 +12,23 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
-{application, libp2p_crypto,
- [{description, "An Erlang library for libp2p related cryptography functions"},
-  {vsn, "git"},
-  {registered, []},
-  {applications, [
-                  kernel,
-                  stdlib,
-                  crypto,
-                  enacl,
-                  ecc_compact,
-                  multiaddr,
-                  multihash,
-                  erl_base58
-                 ]},
-  {env,[]},
+{application, libp2p_crypto, [
+    {description, "An Erlang library for libp2p related cryptography functions"},
+    {vsn, "git"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        enacl,
+        ecc_compact,
+        multiaddr,
+        multihash,
+        erl_base58
+    ]},
+    {env, []},
 
-  %% hex.pm packaging:
-  {licenses, ["Apache 2.0"]},
-  {links, [{"Github", "https://github.com/helium/libp2p-crypto"}]}
- ]}.
+    %% hex.pm packaging:
+    {licenses, ["Apache-2.0"]},
+    {links, [{"Github", "https://github.com/helium/libp2p-crypto"}]}
+]}.
