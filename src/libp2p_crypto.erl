@@ -62,7 +62,7 @@
     {multisig, pos_integer(), pos_integer(), binary()}.
 
 -opaque pubkey_single() ::
-    {ecc_compact, ecc_compact:public_key()}
+    {ecc_compact, ecc_compact:public_key_p256() | ecc_compact:public_key_k256()}
     | {ed25519, enacl_pubkey()}.
 
 -opaque pubkey() ::
