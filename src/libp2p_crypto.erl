@@ -405,7 +405,7 @@ verify(Bin, MultiSignature, {multisig, M, N, KeysDigest}) ->
 verify(Bin, Signature, {ecc_compact, PubKey}) ->
     public_key:verify(Bin, sha256, Signature, PubKey);
 verify(Bin, Signature0, {ed25519, PubKey}) ->
-    Signature = binary:part(Signature0, min(64, byte_size(Signature0))),
+    Signature = binary:part(Signature0, {0, min(64, byte_size(Signature0))}),
     enacl:sign_verify_detached(Signature, Bin, PubKey).
 
 -spec verify_multisig(binary(), binary(), pubkey_multi(), [atom()]) -> boolean().
