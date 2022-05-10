@@ -1,0 +1,16 @@
+[package]
+name = "native"
+version = "0.1.0"
+authors = ["Jay Kickliter <jay@helium.com>"]
+edition = "2018"
+build = "native/build.rs"
+
+[lib]
+crate-type = ["dylib"]
+name = "native"
+path = "native/lib.rs"
+
+[dependencies]
+helium-crypto = { git = "https://github.com/helium/helium-crypto-rs.git", tag = "v0.3.1" }
+rayon = "*"
+rustler = { git = "https://github.com/rusterlium/rustler.git", branch = "master" }

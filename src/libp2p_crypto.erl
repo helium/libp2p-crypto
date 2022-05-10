@@ -74,6 +74,7 @@
 -type key_map() :: #{secret => privkey(), public => pubkey(), network => network()}.
 -type enacl_privkey() :: <<_:256>>.
 -type enacl_pubkey() :: <<_:256>>.
+-type sig_batch() :: [{Msg :: binary(), [{Signature :: binary(), PubKeyBin :: pubkey_bin()}, ...]}].
 
 -export_type([
     privkey/0,
@@ -82,7 +83,8 @@
     pubkey_multi/0,
     pubkey_single/0,
     sig_fun/0,
-    ecdh_fun/0
+    ecdh_fun/0,
+    sig_batch/0
 ]).
 
 -export([
@@ -108,6 +110,7 @@
     b58_to_pubkey/2,
     pubkey_bin_to_p2p/1,
     p2p_to_pubkey_bin/1,
+    verify/1,
     verify/3,
     keys_to_bin/1,
     keys_from_bin/1,
@@ -396,6 +399,16 @@ key_size_bytes(?KEYTYPE_ECC_COMPACT) ->
     32;
 key_size_bytes(KeyType) ->
     error({bad_key_type, KeyType}).
+
+%% @doc Verify a batch of signatures.
+-spec verify(Batch :: sig_batch()) -> boolean().
+verify(Batch) ->
+    case libp2p_crypto_nif:verify(Batch) of
+        ok ->
+            true;
+        {error, _Reason} ->
+            false
+    end.
 
 %% @doc Verifies a binary against a given digital signature.
 -spec verify(binary(), binary(), pubkey()) -> boolean().
@@ -729,6 +742,50 @@ isig_to_bin({I, <<Sig/binary>>}) ->
 -ifdef(TEST).
 
 -include_lib("eunit/include/eunit.hrl").
+
+batch_verify_test() ->
+    MakeBatch = fun (MsgCorruption) ->
+        MakeSubBatch = fun (N) ->
+            Msg = <<<<"sign me please ">>/binary, <<N/integer>>/binary>>,
+            Sign = fun (Kn) ->
+                KeyType = case Kn rem 2 == 1 of
+                  true -> ecc_compact;
+                  false -> ed25519
+                end,
+                #{secret := PrivKey, public := PubKey} =
+                    generate_keys(KeyType),
+                Sign = mk_sig_fun(PrivKey),
+                Signature = Sign(Msg),
+                PubKeyBin = pubkey_to_bin(PubKey),
+                {Signature, PubKeyBin}
+            end,
+            KeySigs = [Sign(X) || X <- lists:seq(1, N)],
+            {<<Msg/binary, MsgCorruption/binary>>, KeySigs}
+        end,
+        [MakeSubBatch(N) || N <- lists:seq(1, 32)]
+    end,
+
+    GoodBatch = MakeBatch(<<>>),
+    ?assertEqual(true, verify(GoodBatch)),
+
+    CorruptedBatch = MakeBatch(<<"garbage">>),
+    ?assertEqual(false, verify(CorruptedBatch)),
+
+    ok.
+
+batch_cross_verify_test_() ->
+    KeyType = ecc_compact,
+    #{secret := PrivKey, public := PubKey} = generate_keys(KeyType),
+    Sign = mk_sig_fun(PrivKey),
+    Msg = <<"secret message">>,
+    Sig = Sign(Msg),
+    MsgBad = <<Msg/binary, "foo">>,
+    [
+        ?_assert(verify(Msg, Sig, PubKey)),
+        ?_assert(verify([{Msg, [{Sig, pubkey_to_bin(PubKey)}]}])),
+        ?_assertNot(verify(MsgBad, Sig, PubKey)),
+        ?_assertNot(verify([{MsgBad, [{Sig, pubkey_to_bin(PubKey)}]}]))
+    ].
 
 %% @doc Generates an EUnit test-set from the given parameters.
 %% For test-set representation details see:
